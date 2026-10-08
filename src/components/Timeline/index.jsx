@@ -79,6 +79,10 @@ const styles = () => ({
     touchAction: 'none',
     width: '100%',
     height: 44,
+    '&:focus-visible': {
+      outline: '2px solid white',
+      outlineOffset: -2,
+    },
   },
   rulerRemaining: {
     backgroundColor: 'rgba(29, 34, 37, 0.9)',

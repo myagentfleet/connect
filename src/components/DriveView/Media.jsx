@@ -28,6 +28,12 @@ const publicTooltip = 'Making a route public allows anyone with the route name o
 const preservedTooltip = 'Preserving a route will prevent it from being deleted. You can preserve up to 10 routes, or 100 if you have comma prime.';
 
 const styles = () => ({
+  playback: {
+    '& button:focus-visible': {
+      outline: '2px solid white',
+      outlineOffset: 2,
+    },
+  },
   mediaOptions: {
     display: 'flex',
     width: 'max-content',
@@ -526,7 +532,7 @@ class Media extends Component {
 
   render() {
     const { inView, windowWidth, isMuted } = this.state;
-    const { hasAudio } = this.props;
+    const { hasAudio, classes } = this.props;
 
     if (this.props.menusOnly) { // for test
       return this.renderMenus(true);
@@ -535,7 +541,7 @@ class Media extends Component {
     const showMapAlways = windowWidth >= 1536;
 
     return (
-      <div className="flex flex-col gap-4">
+      <div className={`${classes.playback} flex flex-col gap-4`}>
         {this.renderMediaOptions(showMapAlways)}
         <div className="flex flex-row gap-5">
           <div className={`${showMapAlways ? 'w-[60%]' : 'w-full'} relative`}>

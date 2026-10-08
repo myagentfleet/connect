@@ -41,7 +41,7 @@ const styles = (theme) => ({
       pointerEvents: 'auto',
     },
     '&.isThin': {
-      height: 50,
+      height: 68,
       paddingBottom: 0,
       paddingTop: 0,
     },
@@ -77,13 +77,18 @@ const styles = (theme) => ({
     width: '40px',
     height: '40px',
   },
+  speedButton: {
+    width: 40,
+    height: 24,
+    borderRadius: 8,
+    color: theme.palette.grey[100],
+    '&:disabled': {
+      color: theme.palette.grey[500],
+    },
+  },
   tinyArrowIcon: {
     width: 12,
     height: 12,
-    color: theme.palette.grey[500],
-    '&[disabled]': {
-      visibility: 'hidden',
-    },
   },
   rightBorderBox: {
     borderRight: `1px solid ${theme.palette.grey[900]}`,
@@ -164,7 +169,7 @@ class TimeDisplay extends Component {
         </Typography>
         <div className={ classes.desiredPlaySpeedContainer }>
           <IconButton
-            className={classes.tinyArrowIcon}
+            className={classes.speedButton}
             onClick={() => this.changeSpeed(1)}
             disabled={desiredPlaySpeed >= timerSteps[timerSteps.length - 1]}
             aria-label="Increase play speed by 1 step"
@@ -176,7 +181,7 @@ class TimeDisplay extends Component {
             ×
           </Typography>
           <IconButton
-            className={classes.tinyArrowIcon}
+            className={classes.speedButton}
             onClick={() => this.changeSpeed(-1)}
             disabled={desiredPlaySpeed <= timerSteps[0]}
             aria-label="Decrease play speed by 1 step"
