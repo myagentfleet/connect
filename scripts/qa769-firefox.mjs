@@ -18,7 +18,8 @@ const viewports = [320, 390, 1280, 1600].map((width) => ({ width, height: width 
 const report = {
   started: new Date().toISOString(), cases: [], layouts: [], screenshots: [],
   scope: 'Production build, official Firefox 141.0.2 matched to Puppeteer 24.16.0, WebDriver BiDi, normal browser under Xvfb, native media events, checked-in H.264/AAC MPEG-TS fixtures, UI-only playback commands. Firefox chooses its natural transport; no media capability or state overrides.',
-  toolchain: { puppeteer: '24.16.0', firefoxBuild: 'stable_141.0.2', protocol: 'WebDriver BiDi', headless: false },
+  toolchain: { puppeteer: '24.16.0', firefoxBuild: 'stable_141.0.2', protocol: 'WebDriver BiDi', headless: false,
+    graphicsConfiguration: 'Mesa software rendering with Firefox X11 GLX; actual renderer is recorded per case' },
   runtime: { platform: process.platform, arch: process.arch, node: process.version, display: process.env.DISPLAY,
     imageOS: process.env.ImageOS, imageVersion: process.env.ImageVersion },
   fixtures: 'Public-route metadata is deterministic; exact missing fragment URLs receive HTTP 404 via request interception, or real TS bytes after repair. Mapbox style is a plain deterministic background; the production WebGL route and marker render normally.',
@@ -191,7 +192,8 @@ async function main() {
   const server = await preview({ configFile: false, build: { outDir: resolve(output, 'app') },
     preview: { host: '127.0.0.1', port: 0, strictPort: true } });
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
-  const browser = await puppeteer.launch({ browser: 'firefox', headless: false, dumpio: true })
+  const browser = await puppeteer.launch({ browser: 'firefox', headless: false, dumpio: true,
+    extraPrefsFirefox: { 'gfx.x11-egl.force-disabled': true } })
     .catch(async (error) => { await server.close(); throw error; });
   report.browser = await browser.version();
   if (!/141\.0\.2(?:$|\D)/.test(report.browser)) {
@@ -449,7 +451,7 @@ async function main() {
         'Old route failure does not surface on the new route');
     });
   } finally {
-    await browser.close(); await server.close();
+    try { await browser.close(); } finally { await server.close(); }
   }
   report.finished = new Date().toISOString();
   report.passed = report.cases.every(({ status }) => status === 'passed');

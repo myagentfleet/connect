@@ -22,6 +22,8 @@ jobs:
       VITE_POSTHOG_HOST: ''
       E2E: 'true'
       TZ: America/Los_Angeles
+      LIBGL_ALWAYS_SOFTWARE: 'true'
+      MOZ_X11_EGL: ''
     defaults:
       run:
         shell: bash
