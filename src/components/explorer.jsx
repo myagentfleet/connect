@@ -3,29 +3,26 @@ import { connect } from 'react-redux';
 import localforage from 'localforage';
 import { push, replace } from 'connected-react-router';
 
-import { withStyles, Button, CircularProgress, Modal, Paper, Typography } from '@material-ui/core';
+import { withStyles, Typography } from '@material-ui/core';
 import 'mapbox-gl/src/css/mapbox-gl.css';
-
-import { api } from '../api/backend';
 
 import AppHeader from './AppHeader';
 import Dashboard from './Dashboard';
 import IosPwaPopup from './IosPwaPopup';
 import AppDrawer from './AppDrawer';
+import AppDialogs from './AppDialogs';
 import BodyTeleop from './BodyTeleop';
 
-import { analyticsEvent, selectDevice, updateDevices, checkLastRoutesData, streamNav } from '../actions';
+import { streamNav } from '../actions';
 import init from '../actions/startup';
-import Colors from '../colors';
-import { play, pause } from '../timeline/playback';
-import { verifyPairToken, pairErrorToMessage } from '../utils';
+import { formatLocation, parseLocation, withDialog } from '../url';
 import { subscribeWindowSize } from '../hooks/window';
 
 import DriveView from './DriveView';
 import NoDeviceUpsell from './DriveView/NoDeviceUpsell';
 import Referrals from './Referrals';
 
-const styles = (theme) => ({
+const styles = {
   app: {
     minHeight: '100vh',
     display: 'flex',
@@ -37,33 +34,7 @@ const styles = (theme) => ({
     flexDirection: 'column',
     flex: 1,
   },
-  modal: {
-    position: 'absolute',
-    padding: theme.spacing.unit * 2,
-    width: theme.spacing.unit * 50,
-    maxWidth: '90%',
-    left: '50%',
-    top: '40%',
-    transform: 'translate(-50%, -50%)',
-    outline: 'none',
-    '& p': { marginTop: 10 },
-  },
-  closeButton: {
-    marginTop: 10,
-    float: 'right',
-    backgroundColor: Colors.grey200,
-    color: Colors.white,
-    '&:hover': {
-      backgroundColor: Colors.grey400,
-    },
-  },
-  fabProgress: {
-    marginTop: 10,
-  },
-  pairedDongleId: {
-    fontWeight: 'bold',
-  },
-});
+};
 
 class ExplorerApp extends Component {
   constructor(props) {
@@ -72,15 +43,11 @@ class ExplorerApp extends Component {
     this.state = {
       drawerIsOpen: false,
       headerRef: null,
-      pairLoading: false,
-      pairError: null,
-      pairDongleId: null,
       windowWidth: window.innerWidth,
     };
 
     this.handleDrawerStateChanged = this.handleDrawerStateChanged.bind(this);
     this.updateHeaderRef = this.updateHeaderRef.bind(this);
-    this.closePair = this.closePair.bind(this);
     this.closeBodyTeleop = this.closeBodyTeleop.bind(this);
   }
 
@@ -89,7 +56,7 @@ class ExplorerApp extends Component {
   }
 
   async componentDidMount() {
-    const { pairLoading, pairError, pairDongleId } = this.state;
+    this.mounted = true;
 
     this.unsubscribeWindowSize = subscribeWindowSize(({ width }) => {
       this.setState({ windowWidth: width });
@@ -97,91 +64,48 @@ class ExplorerApp extends Component {
 
     window.scrollTo({ top: 0 }); // for ios header
 
-    const q = new URLSearchParams(window.location.search);
-    if (q.has('r')) {
-      this.props.dispatch(replace(q.get('r')));
+    const { location, dispatch } = this.props;
+    const redirect = new URLSearchParams(location.search).get('r');
+    const hasRedirect = redirect?.startsWith('/') && !redirect.startsWith('//');
+    if (hasRedirect) {
+      dispatch(replace(redirect));
     }
 
-    this.props.dispatch(init());
-
-    let pairToken;
+    // Older sign-ins stored the token before leaving connect. Restore only the
+    // URL; AppDialogs owns the pairing flow, including its transaction result.
+    this.pairingLocation = hasRedirect || parseLocation(location).dialog ? null : location;
+    dispatch(init());
+    if (!this.pairingLocation) return;
     try {
-      pairToken = await localforage.getItem('pairToken');
+      const pairToken = await localforage.getItem('pairToken');
+      const pairingLocation = this.pairingLocation;
+      this.pairingLocation = null;
+      if (!this.mounted || !pairingLocation || this.props.location !== pairingLocation
+          || typeof pairToken !== 'string' || !pairToken) return;
+      const destination = withDialog(pairingLocation, 'pair', { pairToken });
+      if (parseLocation(destination).dialog === 'pair') dispatch(replace(destination));
     } catch (err) {
       console.error(err);
     }
-    if (pairToken && !pairLoading && !pairError && !pairDongleId) {
-      this.setState({ pairLoading: true });
-
-      try {
-        verifyPairToken(pairToken, true, 'explorer_pair_verify_pairtoken');
-      } catch (err) {
-        this.setState({ pairLoading: false, pairDongleId: null, pairError: `Error: ${err.message}` });
-        await localforage.removeItem('pairToken');
-        return;
-      }
-
-      try {
-        const resp = await api.devices.pilotPair(pairToken);
-        if (resp.dongle_id) {
-          await localforage.removeItem('pairToken');
-          this.setState({
-            pairLoading: false,
-            pairError: null,
-            pairDongleId: resp.dongle_id,
-          });
-
-          const devices = await api.devices.listDevices();
-          this.props.dispatch(updateDevices(devices));
-          this.props.dispatch(analyticsEvent('pair_device', { method: 'url_string' }));
-        } else {
-          await localforage.removeItem('pairToken');
-          console.log(resp);
-          this.setState({ pairDongleId: null, pairLoading: false, pairError: 'Error: could not pair, please try again' });
-        }
-      } catch (err) {
-        await localforage.removeItem('pairToken');
-        const msg = pairErrorToMessage(err, 'explorer_pair_pairtoken');
-        this.setState({ pairDongleId: null, pairLoading: false, pairError: `Error: ${msg}, please try again` });
-      }
-    }
-
-    this.componentDidUpdate({});
   }
 
   componentWillUnmount() {
+    this.mounted = false;
     this.unsubscribeWindowSize?.();
   }
 
-  componentDidUpdate(prevProps, prevState) {
-    const { pathname, zoom, dongleId, limit } = this.props;
-
-    if (prevProps.pathname !== pathname) {
+  componentDidUpdate(prevProps) {
+    if (prevProps.location !== this.props.location) {
+      const { location, dongleId, historyAction } = this.props;
+      const previous = prevProps.location;
+      // Startup may select the default device while storage is loading. Follow
+      // that one replacement; all subsequent navigation cancels restoration.
+      const defaultSelection = this.pairingLocation === previous && previous.pathname === '/'
+        && historyAction === 'REPLACE' && dongleId && location.pathname === formatLocation({ dongleId })
+        && previous.search === location.search && previous.hash === location.hash;
+      this.pairingLocation = defaultSelection ? location : null;
       this.setState({ drawerIsOpen: false });
     }
-
-    if (!prevProps.zoom && zoom) {
-      this.props.dispatch(play());
-    }
-    if (prevProps.zoom && !zoom) {
-      this.props.dispatch(pause());
-    }
-
-    // this is necessary when user goes to explorer for the first time, dongleId is not populated in state yet
-    // so init() will not successfully fetch routes data
-    // when checkLastRoutesData is called within init(), it would set limit so we don't need to check again
-    if (prevProps.dongleId !== dongleId && limit === 0) {
-      this.props.dispatch(checkLastRoutesData());
-    }
-  }
-
-  async closePair() {
-    const { pairDongleId } = this.state;
-    await localforage.removeItem('pairToken');
-    if (pairDongleId) {
-      this.props.dispatch(selectDevice(pairDongleId));
-    }
-    this.setState({ pairLoading: false, pairError: null, pairDongleId: null });
   }
 
   handleDrawerStateChanged(drawerOpen) {
@@ -198,12 +122,12 @@ class ExplorerApp extends Component {
 
   render() {
     const {
-      classes, currentRoute, devices, dispatch, dongleId, bodyTeleopOpen, selectedRouteId, pathname, profile,
+      classes, currentRoute, devices, dispatch, dongleId, bodyTeleopOpen, page, profile,
     } = this.props;
-    const { drawerIsOpen, pairLoading, pairError, pairDongleId, windowWidth } = this.state;
+    const { drawerIsOpen, windowWidth } = this.state;
 
     const noDevicesUpsell = (devices?.length === 0 && !dongleId);
-    const referralsOpen = pathname === '/referrals';
+    const referralsOpen = page === 'referrals';
     const isLarge = noDevicesUpsell || windowWidth > 1080;
 
     const sidebarWidth = noDevicesUpsell ? 0 : Math.max(280, windowWidth * 0.2);
@@ -245,29 +169,14 @@ class ExplorerApp extends Component {
             <div className={ classes.window } style={ containerStyles }>
               { referralsOpen
                 ? <Referrals profile={profile} onBack={() => dispatch(push(dongleId ? `/${dongleId}` : '/'))} />
+                : page === 'not-found'
+                ? <Typography className="p-8">Page not found.</Typography>
                 : noDevicesUpsell
                 ? <NoDeviceUpsell />
-                : ((currentRoute || selectedRouteId) ? <DriveView /> : <Dashboard />)}
+                : (page === 'drive' ? <DriveView /> : <Dashboard />)}
             </div>
+            <AppDialogs />
             <IosPwaPopup />
-            <Modal open={ Boolean(pairLoading || pairError || pairDongleId) } onClose={ this.closePair }>
-              <Paper className={classes.modal}>
-                <Typography variant="title">Pairing device</Typography>
-                <hr />
-                { pairLoading && <CircularProgress size={32} className={classes.fabProgress} /> }
-                { pairDongleId
-                  && (
-                  <Typography>
-                    {'Successfully paired device '}
-                    <span className={ classes.pairedDongleId }>{ pairDongleId }</span>
-                  </Typography>
-                  )}
-                { pairError && <Typography>{ pairError }</Typography> }
-                <Button variant="contained" className={ classes.closeButton } onClick={ this.closePair }>
-                  Close
-                </Button>
-              </Paper>
-            </Modal>
           </>
         ) }
       </div>
@@ -276,14 +185,13 @@ class ExplorerApp extends Component {
 }
 
 const stateToProps = (state) => ({
-  zoom: state.zoom,
-  pathname: state.router.location.pathname,
+  location: state.router.location,
+  historyAction: state.router.action,
+  page: state.navigation.page,
   dongleId: state.dongleId,
   devices: state.devices,
   currentRoute: state.currentRoute,
-  selectedRouteId: state.selectedRouteId,
-  limit: state.limit,
-  bodyTeleopOpen: state.streamNav,
+  bodyTeleopOpen: state.navigation.page === 'stream',
   profile: state.profile,
 });
 

@@ -31,6 +31,34 @@ describe('segments', () => {
     expect(getSegmentNumber(route)).toBe(0);
   });
 
+  it('requires the exact device and drive for a selected route', () => {
+    const state = {
+      dongleId: '99c94dc769b5d96e',
+      selectedRouteId: '2018-04-09--10-10-00',
+      routesMeta: { dongleId: '99c94dc769b5d96e', start: 0, end: 30 },
+      filter: { start: 10, end: 20 },
+      routes: [],
+    };
+    expect(hasRoutesData(state)).toBe(false);
+    expect(hasRoutesData({ ...state, routes })).toBe(true);
+    expect(hasRoutesData({ ...state, routeCache: { [routes[0].fullname]: routes[0] } })).toBe(true);
+    expect(hasRoutesData({ ...state, dongleId: '0000aaaa0000aaaa', routes })).toBe(false);
+    expect(hasRoutesData({ ...state, selectedRouteId: 'another-drive', routes })).toBe(false);
+  });
+
+  it('can reuse a selected route outside the dashboard filter without satisfying dashboard coverage', () => {
+    const state = {
+      dongleId: '99c94dc769b5d96e',
+      selectedRouteId: '2018-04-09--10-10-00',
+      routeCache: { [routes[0].fullname]: routes[0] },
+      routes: null,
+      routesMeta: null,
+      filter: { start: 10, end: 20 },
+    };
+    expect(hasRoutesData(state)).toBe(true);
+    expect(hasRoutesData({ ...state, selectedRouteId: null })).toBe(false);
+  });
+
   it('can check if it has segment metadata', () => {
     expect(hasRoutesData()).toBe(false);
     expect(hasRoutesData({})).toBe(false);

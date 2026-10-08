@@ -8,6 +8,7 @@ import { withStyles, Typography, CircularProgress, Popper, Tooltip } from '@mate
 import { athena as Athena } from '../../api';
 import { deviceSupportsClips } from '../../api/clips';
 import { analyticsEvent, primeNav, streamNav, fetchDeviceNotCar } from '../../actions';
+import { openDialog, closeDialog } from '../../actions/navigation';
 import Colors from '../../colors';
 import { deviceNamePretty, deviceIsOnline, deviceVersionAtLeast, truncateName } from '../../utils';
 import { webrtcConnectionManager } from '../../utils/webrtc';
@@ -153,7 +154,7 @@ class DeviceInfo extends Component {
       snapshot: {},
       windowWidth: window.innerWidth,
       bodyTeleopOpen: false,
-      clipMenu: null,
+      clipAnchor: null,
       clipsSupported: false,
     };
 
@@ -190,7 +191,7 @@ class DeviceInfo extends Component {
         carHealth: {},
         snapshot: {},
         windowWidth: window.innerWidth,
-        clipMenu: null,
+        clipAnchor: null,
         clipsSupported: false,
       });
       this.checkClipsSupport();
@@ -330,10 +331,13 @@ class DeviceInfo extends Component {
           </div>
         </div>
         <ClipMenu
-          open={Boolean(this.state.clipMenu)}
+          open={['clips', 'clip', 'delete-clip'].includes(this.props.dialog)}
+          dialog={this.props.dialog}
+          dialogClip={this.props.dialogClip}
+          dispatch={this.props.dispatch}
           dongleId={this.props.dongleId}
-          anchorEl={this.state.clipMenu}
-          onClose={() => this.setState({ clipMenu: null })}
+          anchorEl={this.state.clipAnchor}
+          onClose={() => this.props.dispatch(closeDialog())}
           routes={this.props.routes}
           deviceOnline={deviceIsOnline(device)}
           inventoryOnly
@@ -413,7 +417,10 @@ class DeviceInfo extends Component {
             <button
               className={`${classes.button} ${classes.carBattery}`}
               aria-label="Clips"
-              onClick={(event) => this.setState({ clipMenu: event.currentTarget })}
+              onClick={(event) => {
+                this.setState({ clipAnchor: event.currentTarget });
+                this.props.dispatch(openDialog('clips'));
+              }}
               disabled={offline}
             >
               <ContentCut />
@@ -517,6 +524,8 @@ const stateToProps = (state) => ({
   dongleId: state.dongleId,
   device: state.device,
   routes: state.routes,
+  dialog: state.navigation.dialog,
+  dialogClip: state.navigation.dialogClip,
 });
 
 export default connect(stateToProps)(withStyles(styles)(DeviceInfo));

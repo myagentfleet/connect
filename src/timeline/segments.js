@@ -2,6 +2,10 @@ export function hasRoutesData(state) {
   if (!state) {
     return false;
   }
+  if (state.selectedRouteId) {
+    const fullname = `${state.dongleId}|${state.selectedRouteId}`;
+    return Boolean(state.routeCache?.[fullname] || state.routes?.some((route) => route.fullname === fullname));
+  }
   if (state.devices && state.devices.length === 0 && !state.dongleId) {
     // new users without devices won't have segment metadata
     return true;

@@ -2,9 +2,11 @@ import React, { Component } from 'react';
 import { connect } from 'react-redux';
 import dayjs from 'dayjs';
 
-import { IconButton, Typography } from '@material-ui/core';
+import { Button, IconButton, Typography } from '@material-ui/core';
 
-import { popTimelineRange, pushTimelineRange } from '../../actions';
+import { navigate, popTimelineRange, pushTimelineRange } from '../../actions/navigation';
+import { retryRoute } from '../../actions/history';
+import { routeLoadKey } from '../../routeLoadStatus';
 import { ArrowBackBold, CloseBold } from '../../icons';
 import { filterRegularClick } from '../../utils';
 
@@ -28,22 +30,29 @@ class DriveView extends Component {
   }
 
   close() {
-    this.props.dispatch(pushTimelineRange(null, null, null));
+    this.props.dispatch(navigate({ page: 'dashboard', dongleId: this.props.dongleId }));
   }
 
   render() {
-    const { dongleId, zoom, currentRoute, routes } = this.props;
+    const { dongleId, zoom, currentRoute, routeLoaded, loadStatus, range } = this.props;
 
     if (!currentRoute) {
+      const failed = loadStatus === 'error';
+      const missing = loadStatus === 'missing' || (routeLoaded && loadStatus !== 'loading');
       return (
         <div className="DriveView p-8">
-          <Typography>{routes === null ? 'Loading...' : 'Route does not exist.'}</Typography>
+          <Typography>{failed ? 'Could not load this drive. Please try again.' : missing ? 'Route does not exist.' : 'Loading...'}</Typography>
+          {(failed || missing) && (
+            <div className="mt-4 flex gap-2">
+              <Button onClick={() => this.props.dispatch(retryRoute())}>Retry</Button>
+              <Button onClick={filterRegularClick(this.close)} href={`/${dongleId}`}>Back to drives</Button>
+            </div>
+          )}
         </div>
       );
     }
 
-    const currentRouteBoundsSelected = zoom.start === 0 && zoom.end === currentRoute.duration;
-    const backButtonDisabled = !zoom?.previousZoom && currentRouteBoundsSelected;
+    const backButtonDisabled = !zoom?.previous && !range;
 
     // FIXME: end time not always same day as start time
     const start = currentRoute.start_time_utc_millis + zoom.start;
@@ -86,9 +95,7 @@ class DriveView extends Component {
             <Timeline route={currentRoute} thumbnailsVisible hasRuler />
           </div>
           <div className='px-3 pb-3 md:px-8 md:pb-8'>
-            {(routes && routes.length === 0)
-              ? <Typography>Route does not exist.</Typography>
-              : <Media />}
+            <Media />
           </div>
         </div>
       </div>
@@ -98,7 +105,9 @@ class DriveView extends Component {
 
 const stateToProps = (state) => ({
   dongleId: state.dongleId,
-  routes: state.routes,
+  routeLoaded: Object.hasOwn(state.routeCache, state.dongleId + '|' + state.selectedRouteId),
+  loadStatus: state.routeLoadStatus?.[routeLoadKey(state.navigation)],
+  range: state.navigation.range,
   zoom: state.zoom,
   currentRoute: state.currentRoute,
 });

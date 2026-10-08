@@ -21,6 +21,8 @@ const LOCALE = 'en-US';
 const TIMEZONE = 'America/Los_Angeles';
 const CHANGE_THRESHOLD = 0.0001;
 const CAPTURE_CONCURRENCY = 4;
+const CLIP_FILENAME = 'coastal-drive.mp4';
+const CLIP_ROUTE_PATH = `/${DONGLE_ID}/${LOG_ID}/10/30`;
 
 const GALLERY_STATES = [
   { name: 'signin', label: 'Sign in', path: '/', readyText: 'Sign in with Google', anonymous: true },
@@ -96,6 +98,46 @@ const GALLERY_STATES = [
     page: 'dashboard',
     pairToken: 'eyJhbGciOiJub25lIn0.eyJpZGVudGl0eSI6ImdhbGxlcnkifQ.',
     modalText: 'Pairing device',
+  },
+  {
+    name: 'clips-menu-url',
+    label: 'Clips menu (direct link)',
+    page: 'drive',
+    path: `${CLIP_ROUTE_PATH}?dialog=clips`,
+    clips: true,
+    newUrlState: true,
+    readyText: 'coastal-drive',
+    modalText: 'CLIPS ON THIS DEVICE',
+  },
+  {
+    name: 'clip-viewer-loading-url',
+    label: 'Clip viewer (download pending)',
+    page: 'drive',
+    path: `${CLIP_ROUTE_PATH}?dialog=clip&clip=${CLIP_FILENAME}`,
+    clips: true,
+    newUrlState: true,
+    readyText: 'Downloading · 0%',
+    modalText: 'Downloading · 0%',
+  },
+  {
+    name: 'clip-viewer-missing-url',
+    label: 'Missing clip (direct link)',
+    page: 'drive',
+    path: `${CLIP_ROUTE_PATH}?dialog=clip&clip=missing-clip.mp4`,
+    clips: true,
+    newUrlState: true,
+    readyText: 'Clip not found on this device.',
+    modalText: 'Clip not found on this device.',
+  },
+  {
+    name: 'delete-clip-url',
+    label: 'Delete clip confirmation (direct link)',
+    page: 'drive',
+    path: `${CLIP_ROUTE_PATH}?dialog=delete-clip&clip=${CLIP_FILENAME}`,
+    clips: true,
+    newUrlState: true,
+    readySelector: '[role="dialog"] button:last-child:not([disabled])',
+    modalText: 'Delete clip?',
   },
 ];
 
@@ -306,7 +348,7 @@ function jsonResponse(request, value, status = 200) {
   });
 }
 
-async function mockGalleryRequest(request, origin, pageName, fixtures) {
+async function mockGalleryRequest(request, origin, pageName, fixtures, state) {
   const url = new URL(request.url());
   if (url.origin === origin) {
     const eventsMatch = url.pathname.match(/^\/__gallery-route\/(\d+)\/events\.json$/);
@@ -353,6 +395,10 @@ async function mockGalleryRequest(request, origin, pageName, fixtures) {
   }
 
   const data = galleryData(origin, pageName);
+  if (state.clips) {
+    data.device.version = '0.11.2';
+    data.device.openpilot_version = '0.11.2';
+  }
   const path = decodeURIComponent(url.pathname).replace(/\/$/, '');
   if (url.hostname === 'api.comma.ai') {
     if (path === '/v1/me') return jsonResponse(request, data.profile);
@@ -389,6 +435,34 @@ async function mockGalleryRequest(request, origin, pageName, fixtures) {
   }
   if (url.hostname === 'athena.comma.ai' && path === `/${DONGLE_ID}`) {
     const payload = JSON.parse(request.postData() || '{}');
+    if (state.clips) {
+      if (payload.method === 'getVersion') {
+        return jsonResponse(request, { result: { commit_date: Math.floor(FIXED_TIMESTAMP / 1000) } });
+      }
+      if (payload.method === 'getClipState') {
+        return jsonResponse(request, { result: {
+          clips: [{
+            filename: CLIP_FILENAME,
+            status: 'ready',
+            requested_at: Math.floor(FIXED_TIMESTAMP / 1000) - 60,
+            route: LOG_ID,
+            camera: 'fcamera.hevc',
+            source_start_time: 10,
+            source_end_time: 30,
+            speedup: 1,
+            size: 2 * 1024 * 1024,
+          }],
+          cameras: Object.fromEntries(['fcamera.hevc', 'ecamera.hevc', 'dcamera.hevc']
+            .map((camera) => [camera, { available_ranges: [[0, 60]] }])),
+        } });
+      }
+      // There is no local video fixture. Capture the real pending download UI;
+      // do not substitute an empty blob and imply that playback was verified.
+      if (payload.method === 'getClipChunk') return undefined;
+      if (['createClip', 'deleteClip'].includes(payload.method)) {
+        throw new Error(`Unexpected clip mutation in ${state.name}: ${payload.method}`);
+      }
+    }
     if (payload.method === 'getMessage') {
       return jsonResponse(request, { result: { peripheralState: { voltage: 12300 } } });
     }
@@ -544,6 +618,7 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
   const page = await context.newPage();
   const failures = [];
   const pageState = GALLERY_STATES.find(({ name }) => name === (state.page ?? state.name));
+  const readyState = state.readySelector || state.readyText ? state : pageState;
   try {
     await page.setViewport({ width: viewport.width, height: viewport.height, deviceScaleFactor: 1 });
     await page.emulateTimezone(TIMEZONE);
@@ -638,7 +713,7 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
         request.continue();
         return;
       }
-      mockGalleryRequest(request, origin, pageState.name, fixtures).catch((error) => {
+      mockGalleryRequest(request, origin, pageState.name, fixtures, state).catch((error) => {
         failures.push(`request error: ${error.message}`);
         if (!request.isInterceptResolutionHandled()) request.abort('failed').catch(() => {});
       });
@@ -659,7 +734,7 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
       }
     });
 
-    await page.goto(`${origin}${pageState.path}`, {
+    await page.goto(`${origin}${state.path ?? pageState.path}`, {
       waitUntil: 'domcontentloaded',
       timeout: 15000,
     });
@@ -669,7 +744,7 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
         return expectedText && document.body.innerText.includes(expectedText);
       },
       { timeout: 15000 },
-      { selector: pageState.readySelector, expectedText: pageState.readyText },
+      { selector: readyState.readySelector, expectedText: readyState.readyText },
     );
     await page.evaluate(async () => {
       if (document.fonts) await document.fonts.ready;
@@ -727,7 +802,10 @@ async function captureRenderers(renderers, output, fixtures) {
       });
       const destination = resolve(output, renderer.name);
       await mkdir(destination, { recursive: true });
-      const pending = GALLERY_STATES.flatMap((state) => GALLERY_VIEWPORTS.map((viewport) => ({ state, viewport })));
+      // A local pre-change checkout does not implement the new direct-link states.
+      // Every current capture remains required; unavailable baselines are labeled in the report.
+      const states = renderer.name === 'base' ? GALLERY_STATES.filter((state) => !state.newUrlState) : GALLERY_STATES;
+      const pending = states.flatMap((state) => GALLERY_VIEWPORTS.map((viewport) => ({ state, viewport })));
       await Promise.all(Array.from({ length: CAPTURE_CONCURRENCY }, async () => {
         while (pending.length) {
           const { state, viewport } = pending.shift();

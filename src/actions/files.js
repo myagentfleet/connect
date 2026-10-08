@@ -21,6 +21,7 @@ const MAX_RETRIES = 5;
 const HIGH_PRIORITY = 0;
 
 let uploadQueueTimeout = null;
+let uploadQueueGeneration = 0;
 let openRequests = 0;
 
 function pathToFileName(dongleId, path) {
@@ -131,6 +132,7 @@ export function fetchFiles(routeName, nocache = false) {
 }
 
 export function cancelFetchUploadQueue() {
+  uploadQueueGeneration += 1;
   if (uploadQueueTimeout) {
     if (uploadQueueTimeout !== true) {
       clearTimeout(uploadQueueTimeout);
@@ -145,6 +147,7 @@ export function fetchUploadQueue(dongleId) {
       return;
     }
     uploadQueueTimeout = true;
+    const generation = uploadQueueGeneration;
 
     dispatch(fetchDeviceNetworkStatus(dongleId));
 
@@ -154,16 +157,19 @@ export function fetchUploadQueue(dongleId) {
       id: 0,
     };
     const uploadQueue = await athenaCall(dongleId, payload, 'action_files_athena_uploadqueue');
+    if (generation !== uploadQueueGeneration) return;
     if (!uploadQueue || !uploadQueue.result) {
       if (uploadQueue && uploadQueue.offline) {
         dispatch(updateDeviceOnline(dongleId, 0));
       }
-      cancelFetchUploadQueue();
+      if (generation === uploadQueueGeneration) cancelFetchUploadQueue();
       return;
     }
     dispatch(updateDeviceOnline(dongleId, Math.floor(Date.now() / 1000)));
+    if (generation !== uploadQueueGeneration) return;
 
-    const prevFilesUploading = getState().filesUploading || {};
+    const { filesUploading, filesUploadingMeta } = getState();
+    const prevFilesUploading = filesUploadingMeta?.dongleId === dongleId ? { ...filesUploading } : {};
     const device = getDeviceFromState(getState(), dongleId);
     const uploadingFiles = {};
     const newCurrentUploading = {};
@@ -201,9 +207,9 @@ export function fetchUploadQueue(dongleId) {
       uploading: newCurrentUploading,
       files: uploadingFiles,
     });
-    if (uploadQueueTimeout === true && uploadQueue.result.length) {
-      cancelFetchUploadQueue();
+    if (generation === uploadQueueGeneration && uploadQueueTimeout === true && uploadQueue.result.length) {
       uploadQueueTimeout = setTimeout(() => {
+        if (generation !== uploadQueueGeneration) return;
         uploadQueueTimeout = null;
         dispatch(fetchUploadQueue(dongleId));
       }, 2000);
