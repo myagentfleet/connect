@@ -544,7 +544,7 @@ class Media extends Component {
       <div className={`${classes.playback} flex flex-col gap-4`}>
         {this.renderMediaOptions(showMapAlways)}
         <div className="flex flex-row gap-5">
-          <div className={`${showMapAlways ? 'w-[60%]' : 'w-full'} relative`}>
+          <div className={`${showMapAlways ? 'w-[60%]' : 'w-full'} min-w-0 relative`}>
             {/* Keep video mounted so it drives playback even under the map. */}
             <DriveVideo
               isMuted={isMuted}
