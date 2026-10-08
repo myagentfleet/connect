@@ -3,10 +3,9 @@
 //   - authentication/profile: pretend to be signed in with a demo profile
 //   - device listing: a single synthetic demo device
 //   - route listing: synthetic routes cloned from one cached public route
-//   - route files: synthetic file listings cloned from one cached public files
-//     response
-//   - video URLs: demo routes stream the underlying public route, except the
-//     clone mutated to be missing qcamera (it has no share credentials)
+//   - route files: cloned public file listings or local playback-fixture files
+//   - video URLs: public-route streams or small HTTP playback fixtures with
+//     real missing fragments, shared by native HLS and hls.js
 // Everything else (billing, athena, ...) passes through.
 export const DEMO_DONGLE_ID = 'deadbeefdeadbeef';
 
@@ -31,6 +30,46 @@ const DEMO_PROFILE = {
 };
 
 const AFFECTED_SEGMENT = 1;
+
+function fileSegmentNumber(file) {
+  const pathParts = new URL(file).pathname.split('/');
+  return Number(pathParts[pathParts.length - 2]);
+}
+
+function removeFileSegments(files, type, affectedSegment) {
+  if (affectedSegment === undefined) {
+    delete files[type];
+  } else if (Array.isArray(files[type])) {
+    files[type] = files[type].filter((url) => fileSegmentNumber(url) !== affectedSegment);
+  }
+}
+
+function fixtureUrl(path) {
+  return new URL(`/demo-video/${path}`, window.location.origin).href;
+}
+
+function playbackFixtureRoute(route) {
+  const start = route.segment_start_times[0];
+  Object.assign(route, {
+    url: fixtureUrl(''),
+    segment_numbers: [0, 1, 2],
+    segment_start_times: [start, start + 60000, start + 120000],
+    segment_end_times: [start + 60000, start + 120000, start + 180000],
+    start_time_utc_millis: start,
+    end_time_utc_millis: start + 180000,
+    end_time: new Date(start + 180000).toISOString().slice(0, 19),
+    maxqlog: 2,
+    procqlog: 2,
+    videoStartOffset: 0,
+    distance: 0.105,
+    start_lat: 32.75,
+    start_lng: -117.195,
+    end_lat: 32.75,
+    end_lng: -117.1932,
+  });
+  delete route.share_exp;
+  delete route.share_sig;
+}
 
 // One clone per test case. Each case mutates a fresh clone of the real public
 // data on its way into the frontend.
@@ -83,6 +122,7 @@ const MISSING_DATA_CASES = [
   },
   {
     title: 'Missing qcamera',
+    missingVideo: true,
     // No share credentials, so this route's stream cannot resolve.
     route(route, affectedSegment) {
       if (affectedSegment === undefined) {
@@ -102,29 +142,29 @@ const MISSING_DATA_CASES = [
   },
 ];
 
-// Keep two full-length routes for every case: one where the whole route is
-// affected and one where only a single segment is affected.
+// Keep the existing whole-route and single-segment demo IDs. Partial video
+// failure uses the HTTP fixture so its stream agrees with its file listing.
 const TEST_CASES = MISSING_DATA_CASES.flatMap((testCase) => [
   testCase,
   {
     ...testCase,
     title: `${testCase.title} (1 segment)`,
     affectedSegment: AFFECTED_SEGMENT,
+    // A file-list mutation alone leaves the real video stream intact.
+    ...(testCase.missingVideo && {
+      title: 'Missing qcamera (1 segment, synthetic video)',
+      videoFixture: 'missing-middle',
+      missingVideoSegments: [1],
+      route: playbackFixtureRoute,
+    }),
   },
 ]);
 
-function fileSegmentNumber(file) {
-  const pathParts = new URL(file).pathname.split('/');
-  return Number(pathParts[pathParts.length - 2]);
-}
-
-function removeFileSegments(files, type, affectedSegment) {
-  if (affectedSegment === undefined) {
-    delete files[type];
-  } else if (Array.isArray(files[type])) {
-    files[type] = files[type].filter((url) => fileSegmentNumber(url) !== affectedSegment);
-  }
-}
+TEST_CASES.push(
+  { title: 'Synthetic playback (complete)', videoFixture: 'complete', missingVideoSegments: [], route: playbackFixtureRoute },
+  { title: 'Synthetic playback (missing first segment)', videoFixture: 'missing-first', missingVideoSegments: [0], route: playbackFixtureRoute },
+  { title: 'Synthetic playback (missing middle segment)', videoFixture: 'missing-middle', missingVideoSegments: [1], route: playbackFixtureRoute },
+);
 
 function demoRouteLogId(index) {
   return `00000000--${String(index + 1).padStart(10, '0')}`;
@@ -188,6 +228,13 @@ export function createDemoBackend(realBackend) {
   async function getDemoRouteFiles(routeName) {
     const index = demoRouteIndex(routeName);
     const testCase = TEST_CASES[index];
+    if (testCase.videoFixture) {
+      return {
+        qcameras: [0, 1, 2]
+          .filter((segment) => !testCase.missingVideoSegments.includes(segment))
+          .map((segment) => fixtureUrl(`${segment}/qcamera.ts`)),
+      };
+    }
     const files = structuredClone(await fetchPublicFiles());
     const { files: mutateFiles } = testCase;
     return mutateFiles ? mutateFiles(files, testCase.affectedSegment) : files;
@@ -201,6 +248,9 @@ export function createDemoBackend(realBackend) {
 
   function routeAsset(type, route, segment, fileName) {
     const testCase = TEST_CASES[demoRouteIndex(route.fullname)];
+    if (testCase?.videoFixture) {
+      return fixtureUrl(`${segment}/${fileName}`);
+    }
     const missingForRoute = testCase && testCase.missingRouteAssets?.includes(type);
     const missingForSegment = testCase?.affectedSegment === undefined
       || testCase?.affectedSegment === segment;
@@ -251,6 +301,9 @@ export function createDemoBackend(realBackend) {
       thumbnail(route, segment) {
         const index = demoRouteIndex(route.fullname);
         const testCase = TEST_CASES[index];
+        if (testCase?.videoFixture) {
+          return fixtureUrl(`${segment}/sprite.jpg`);
+        }
         if (testCase?.missingThumbnails
           && (testCase.affectedSegment === undefined || testCase.affectedSegment === segment)) {
           return missingAssetUrl(route, segment, 'sprite.jpg');
@@ -261,6 +314,12 @@ export function createDemoBackend(realBackend) {
     video: {
       ...realBackend.video,
       getQcameraStreamUrl(routeStr, exp, sig) {
+        if (typeof routeStr === 'string' && routeStr.startsWith(`${DEMO_DONGLE_ID}|`)) {
+          const testCase = TEST_CASES[demoRouteIndex(routeStr)];
+          if (testCase?.videoFixture) {
+            return fixtureUrl(`${testCase.videoFixture}.m3u8`);
+          }
+        }
         // demo routes keep the public route's share credentials, so stream the
         // underlying public route; the clone missing qcamera has no credentials
         // and passes through to a URL that cannot resolve
