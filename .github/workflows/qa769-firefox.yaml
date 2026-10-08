@@ -1,0 +1,57 @@
+# Validation only: copy to .github/workflows/qa769-firefox.yaml on qa/769-firefox.
+name: qa769-firefox
+
+on:
+  push:
+    branches: [qa/769-firefox]
+
+permissions:
+  contents: read
+
+jobs:
+  firefox:
+    if: github.ref == 'refs/heads/qa/769-firefox'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      QA_CANDIDATE_SHA: c0772ff6641ce93bc16a6fc884a0959da4a9c17b
+      QA769_OUTPUT: qa769-firefox-results
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      VITE_APP_GIT_SHA: ${{ github.sha }}
+      VITE_POSTHOG_KEY: ''
+      VITE_POSTHOG_HOST: ''
+      E2E: 'true'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install frozen candidate dependencies
+        run: |
+          printf 'PUPPETEER_CACHE_DIR=%s/qa769-firefox-browser\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          mkdir -p "$QA769_OUTPUT"
+          bun install --frozen-lockfile 2>&1 | tee "$QA769_OUTPUT/install.log"
+      - name: Install the existing matched browser tools without saving dependencies
+        run: bun add --no-save --trust puppeteer@24.16.0 pngjs@7.0.0 2>&1 | tee "$QA769_OUTPUT/browser-tools.log"
+      - name: Install official Firefox matched to Puppeteer 24.16.0
+        run: node node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js browsers install firefox@stable_141.0.2 2>&1 | tee "$QA769_OUTPUT/firefox-install.log"
+      - name: Ensure Linux media codecs and the normal X display are available
+        run: |
+          sudo apt-get update -qq 2>&1 | tee "$QA769_OUTPUT/runtime-prerequisites.log"
+          sudo apt-get install --yes --no-install-recommends libavcodec60 libgl1-mesa-dri libegl1 xvfb xauth 2>&1 | tee -a "$QA769_OUTPUT/runtime-prerequisites.log"
+      - name: Exercise production playback in real Firefox through the UI
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' node scripts/qa769-firefox.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
+      - name: Upload diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa769-firefox-${{ github.run_id }}
+          path: qa769-firefox-results
+          if-no-files-found: warn
+          retention-days: 7
