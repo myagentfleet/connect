@@ -17,7 +17,7 @@ const routes = { complete: 11, first: 12, middle: 13 };
 const viewports = [320, 390, 1280, 1600].map((width) => ({ width, height: width < 600 ? 844 : 800, deviceScaleFactor: 1 }));
 const report = {
   started: new Date().toISOString(), cases: [], layouts: [], screenshots: [],
-  scope: 'Production build, real Google Chrome, native media events, checked-in H.264/AAC MPEG-TS fixtures, UI-only playback commands.',
+  scope: 'Production build, real Google Chrome, native media events, checked-in H.264/AAC MPEG-TS fixtures, UI-only playback commands. The explicitly labeled MSE scenario overrides only HLS capability discovery to exercise hls.js.',
   fixtures: 'Public-route metadata is deterministic; exact missing fragment URLs receive HTTP 404 via request interception, or real TS bytes after repair. Mapbox style is a plain deterministic background; the production WebGL route and marker render normally.',
   omissions: ['Native Safari/iOS/Android and installed PWAs', 'Physical audio output, Bluetooth, background/foreground and OS media controls', 'Production map tiles and real driving footage', 'Deterministically delayed native play promise rejection (covered separately by unit tests)'],
 };
@@ -35,6 +35,11 @@ const media = (page) => page.$eval(VIDEO, (video) => ({
   videoWidth: video.videoWidth, videoHeight: video.videoHeight,
   frames: video.getVideoPlaybackQuality?.().totalVideoFrames || 0,
   audioBytes: video.webkitAudioDecodedByteCount || 0,
+  currentSrc: video.currentSrc, canPlayHls: video.canPlayType('application/vnd.apple.mpegurl'),
+  originalCanPlayHls: globalThis.qaOriginalCanPlayHls,
+  hlsModuleLoaded: performance.getEntriesByType('resource').some(({ name }) => /\/hls-[^/]+\.js/.test(name)),
+  buffered: Array.from({ length: video.buffered.length }, (_, index) => [video.buffered.start(index), video.buffered.end(index)]),
+  error: video.error && { code: video.error.code, message: video.error.message },
 }));
 
 async function click(page, selector) {
@@ -181,17 +186,25 @@ async function main() {
     .catch(async (error) => { await server.close(); throw error; });
   report.browser = await browser.version();
 
-  async function scenario(name, run) {
+  async function scenario(name, run, forceMse = false) {
     const context = await browser.createBrowserContext();
     const page = await context.newPage();
-    const result = { name, status: 'running', requests: [], console: [], pageErrors: [], held: [], healed: new Set() };
+    const result = { name, status: 'running', forceMse, requests: [], console: [], pageErrors: [], held: [], healed: new Set() };
     report.cases.push(result);
     try {
       page.setDefaultTimeout(15000);
       await page.setViewport(viewports[1]);
       await page.emulateTimezone('America/Los_Angeles');
       await page.setCacheEnabled(false);
-      await page.evaluateOnNewDocument(() => {
+      await page.evaluateOnNewDocument((forceMse) => {
+        globalThis.qaOriginalCanPlayHls = document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
+        performance.setResourceTimingBufferSize(2000);
+        if (forceMse) {
+          const canPlayType = HTMLMediaElement.prototype.canPlayType;
+          HTMLMediaElement.prototype.canPlayType = function (type) {
+            return type === 'application/vnd.apple.mpegurl' ? '' : canPlayType.call(this, type);
+          };
+        }
         globalThis.qaEvents = [];
         let nextId = 0;
         for (const type of ['loadedmetadata', 'playing', 'pause', 'seeking', 'seeked', 'waiting', 'ended', 'error', 'emptied', 'ratechange', 'timeupdate']) {
@@ -199,11 +212,12 @@ async function main() {
             if (!(target instanceof HTMLVideoElement)) return;
             target.dataset.qaVideo ||= String(++nextId);
             globalThis.qaEvents.push({ type, id: target.dataset.qaVideo, time: target.currentTime,
-              at: performance.now(), paused: target.paused, ready: target.readyState, rate: target.playbackRate });
+              at: performance.now(), paused: target.paused, ready: target.readyState, rate: target.playbackRate,
+              error: target.error && { code: target.error.code, message: target.error.message } });
             if (globalThis.qaEvents.length > 2000) globalThis.qaEvents.shift();
           }, true);
         }
-      });
+      }, forceMse);
       page.on('pageerror', (error) => result.pageErrors.push(error.message));
       page.on('console', (message) => { if (['warning', 'error'].includes(message.type())) result.console.push(message.text()); });
       const start = Math.floor(Date.now() / 60000) * 60000 - 180000;
@@ -226,7 +240,8 @@ async function main() {
           const url = new URL(request.url());
           if (request.method() === 'OPTIONS') await respond(request, '', 204, 'text/plain');
           else if (missing.has(url.href)) {
-            result.requests.push({ at: Date.now(), url: url.href, repaired: result.healed.has(url.href), held: Boolean(result.hold) });
+            result.requests.push({ at: Date.now(), url: url.href, type: request.resourceType(),
+              repaired: result.healed.has(url.href), held: Boolean(result.hold) });
             if (result.hold) { result.held.push(request); return; }
             await respond(request, result.healed.has(url.href) ? missing.get(url.href) : 'BlobNotFound',
               result.healed.has(url.href) ? 200 : 404, result.healed.has(url.href) ? 'video/mp2t' : 'text/plain');
@@ -327,10 +342,24 @@ async function main() {
       await click(page, 'button[aria-label="Unpause"]'); await playing(page);
     });
 
-    await scenario('missing-middle-and-loops', async ({ page, result, openRoute }) => {
+    await scenario('natural-chrome-middle-gap-recovery', async ({ page, result, openRoute }) => {
       await openRoute('middle'); await playing(page); await pause(page);
-      await settledAt(page, await seek(page, 30));
+      await seek(page, 75); await errorVisible(page); await capture(page, 'natural-middle-gap');
+      const count = result.requests.length; await textButton(page, 'Retry');
+      await eventually(() => result.requests.length > count, 'Natural-browser Retry reattempts the missing middle fragment');
+      await errorVisible(page);
+      await settledAt(page, await seek(page, 125)); await click(page, 'button[aria-label="Unpause"]'); await playing(page);
+      await capture(page, 'natural-middle-recovered');
+    });
+
+    await scenario('forced-mse-prefetch-and-loops', async ({ page, result, openRoute }) => {
+      await openRoute('middle'); await playing(page); await pause(page);
+      const transport = await media(page);
+      assert.ok(transport.currentSrc.startsWith('blob:') && transport.hlsModuleLoaded, 'This scenario actually exercises hls.js/MSE');
+      // Trigger the actual request near the buffered end, not an assumed paused prefetch threshold.
+      await seek(page, 55); await click(page, 'button[aria-label="Unpause"]');
       await eventually(() => result.requests.length, 'Real HLS prefetch encounters missing middle fragment');
+      await pause(page); result.prefetchMedia = await media(page);
       await delay(300);
       const slider = await page.$(TIMELINE); await slider.evaluate((element) => element.scrollIntoView({ block: 'center' }));
       const box = await slider.boundingBox();
@@ -358,7 +387,7 @@ async function main() {
       const count = result.requests.length; await textButton(page, 'Retry');
       await eventually(() => result.requests.length > count, 'Retry reattempts a still-missing fragment'); await errorVisible(page);
       await settledAt(page, await seek(page, 125)); await click(page, 'button[aria-label="Unpause"]'); await playing(page);
-    });
+    }, true);
 
     await scenario('navigation-cancellation-and-loading', async ({ page, result, openRoute, respond }) => {
       result.hold = true; await openRoute('first');

@@ -275,7 +275,7 @@ class RouteVideo extends Component {
     const { isMuted, videoStatus } = this.props;
     const { error } = this.state;
     return (
-      <div className="min-h-[200px] relative max-w-[964px] m-[0_auto] aspect-[1.593] bg-black">
+      <div className="min-h-[200px] relative w-full max-w-[964px] m-[0_auto] aspect-[1.593] bg-black">
         <video
           ref={this.video}
           className="block h-full w-full"
