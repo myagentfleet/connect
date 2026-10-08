@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
-      QA_CANDIDATE_SHA: 912706ae528a4a2604d7e4431fb436bde7819a04
+      QA_CANDIDATE_SHA: 881bd045ff307c010b14405b9d3e39b7de470b59
       QA769_OUTPUT: qa769-results
       PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
       PUPPETEER_SKIP_DOWNLOAD: 'true'

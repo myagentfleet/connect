@@ -1,3 +1,5 @@
+import { isIos } from '../../utils/browser.js';
+
 // Both playback paths receive the same stream; the media element owns its clock.
 export function openStream(video, url, { onError, onAudio, startPosition = 0 }) {
   let hls;
@@ -14,16 +16,24 @@ export function openStream(video, url, { onError, onAudio, startPosition = 0 }) 
       onError(error);
     }
   };
+  const openNative = () => {
+    native = true;
+    video.src = url;
+    video.load();
+    seek(position);
+  };
   try {
-    if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      native = true;
-      video.src = url;
-      video.load();
-      seek(position);
+    const nativeSupported = video.canPlayType('application/vnd.apple.mpegurl');
+    // Keep iOS audio native. Elsewhere MSE can start past a missing first fragment.
+    if (nativeSupported && isIos()) {
+      openNative();
     } else {
       import('hls.js').then(({ default: Hls }) => {
         if (destroyed) return;
-        if (!Hls.isSupported()) throw new Error('HLS playback is not supported by this browser.');
+        if (!Hls.isSupported()) {
+          if (nativeSupported) { openNative(); return; }
+          throw new Error('HLS playback is not supported by this browser.');
+        }
         hls = new Hls({ autoStartLoad: false, maxBufferLength: 40 });
         hls.on(Hls.Events.MANIFEST_PARSED, () => { if (!destroyed) hls.startLoad(position); });
         hls.on(Hls.Events.ERROR, (_event, error) => { if (!destroyed && error.fatal) onError(error); });

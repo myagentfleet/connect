@@ -96,9 +96,12 @@ async function settledAt(page, seconds, paused = true) {
 }
 
 async function errorVisible(page) {
+  await page.waitForFunction((selector) => document.querySelector(selector)?.currentSrc, {}, VIDEO);
+  // hls.js 1.7 retries fragment errors for up to 31 seconds before reporting fatal failure.
+  const timeout = (await media(page)).currentSrc.startsWith('blob:') ? 45000 : 15000;
   await page.waitForFunction(() => [...document.querySelectorAll('[role="status"]')]
     .some((element) => /not uploaded|Unable to load video/.test(element.textContent)
-      && [...element.querySelectorAll('button')].some((button) => button.textContent.trim() === 'Retry')));
+      && [...element.querySelectorAll('button')].some((button) => button.textContent.trim() === 'Retry')), { timeout });
   assert.equal((await media(page)).paused, true, 'A terminal error pauses the actual media element');
 }
 

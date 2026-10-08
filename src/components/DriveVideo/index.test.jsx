@@ -39,6 +39,7 @@ const media = (video, values) => Object.defineProperties(video, Object.fromEntri
 beforeEach(() => {
   mocks.streams.length = 0;
   Hls.isSupported.mockReturnValue(true);
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('iPhone');
   vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1);
   vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('probably');
@@ -310,8 +311,9 @@ test('HLS starts at the latest selected position and accepts new seeks before an
   expect(store.getState().offset).toBe(31000);
 });
 
-test('seeking beyond a missing first fragment starts the replacement stream at the requested segment', async () => {
-  HTMLMediaElement.prototype.canPlayType.mockReturnValue('');
+test('Chrome advertising native HLS uses MSE so a seek can start beyond a missing first fragment', async () => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Chrome/154.0.0.0');
+  HTMLMediaElement.prototype.canPlayType.mockReturnValue('maybe');
   const { video, store } = mountVideo({ currentRoute: { ...route, duration: 180000 } });
   await finishImport();
   const first = mocks.streams[0];
@@ -330,10 +332,44 @@ test('seeking beyond a missing first fragment starts the replacement stream at t
   expect(store.getState()).toMatchObject({ offset: 125000, videoStatus: 'ready' });
 });
 
-test('unmounting before the HLS import completes never creates an abandoned player', async () => {
-  HTMLMediaElement.prototype.canPlayType.mockReturnValue('');
-  const { unmount, store } = mountVideo();
+test.each([
+  ['iPhone', 0],
+  ['Macintosh', 5],
+])('keeps %s playback native when MSE is also supported', async (userAgent, maxTouchPoints) => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(userAgent);
+  const originalTouchPoints = Object.getOwnPropertyDescriptor(navigator, 'maxTouchPoints');
+  Object.defineProperty(navigator, 'maxTouchPoints', { configurable: true, value: maxTouchPoints });
+  try {
+    const { video } = mountVideo({ loop: { startTime: 20000, duration: 20000 } });
+    await finishImport();
+    expect(video.src).toBe('https://example.com/drive.m3u8');
+    expect(video.currentTime).toBe(18);
+    expect(mocks.streams).toHaveLength(0);
+  } finally {
+    if (originalTouchPoints) Object.defineProperty(navigator, 'maxTouchPoints', originalTouchPoints);
+    else delete navigator.maxTouchPoints;
+  }
+});
+
+test('falls back to native HLS without MSE and applies the latest pending seek', async () => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Chrome/154.0.0.0');
+  Hls.isSupported.mockReturnValue(false);
+  const { video, store } = mountVideo();
+  act(() => { store.dispatch(seek(25000)); store.dispatch(pause()); });
+  await finishImport();
+  expect(video.src).toBe('https://example.com/drive.m3u8');
+  expect(video.currentTime).toBe(23);
   expect(mocks.streams).toHaveLength(0);
+  ready(video);
+  fireEvent.seeked(video);
+  expect(store.getState()).toMatchObject({ offset: 25000, isPlaying: false, videoStatus: 'ready' });
+});
+
+test('unmounting before the HLS import completes never creates an abandoned player', async () => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Chrome/154.0.0.0');
+  const { unmount, store, video } = mountVideo();
+  expect(mocks.streams).toHaveLength(0);
+  expect(video.getAttribute('src')).toBeNull();
   unmount();
   const before = store.getState();
   await finishImport();
