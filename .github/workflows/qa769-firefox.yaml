@@ -21,6 +21,7 @@ jobs:
       VITE_POSTHOG_KEY: ''
       VITE_POSTHOG_HOST: ''
       E2E: 'true'
+      TZ: America/Los_Angeles
     defaults:
       run:
         shell: bash

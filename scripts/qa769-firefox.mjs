@@ -207,7 +207,6 @@ async function main() {
     try {
       page.setDefaultTimeout(15000);
       await page.setViewport(viewports[1]);
-      await page.emulateTimezone('America/Los_Angeles');
       await page.setCacheEnabled(false);
       await page.evaluateOnNewDocument(() => {
         performance.setResourceTimingBufferSize(2000);
