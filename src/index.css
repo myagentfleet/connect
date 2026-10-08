@@ -131,3 +131,8 @@ a:focus {
     @apply bg-[radial-gradient(circle_at_30%_30%,rgba(255,255,255,0.25),rgba(255,255,255,0.05))];
   }
 }
+
+@keyframes drive-video-loading {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

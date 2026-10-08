@@ -10,7 +10,6 @@ import Thumbnails from './thumbnails';
 import theme from '../../theme';
 import { pushTimelineRange } from '../../actions';
 import Colors from '../../colors';
-import { currentOffset } from '../../timeline';
 import { seek } from '../../timeline/playback';
 import { getSegmentNumber } from '../../utils';
 
@@ -147,18 +146,17 @@ class Timeline extends Component {
   constructor(props) {
     super(props);
 
-    this.getOffset = this.getOffset.bind(this);
     this.handleClick = this.handleClick.bind(this);
     this.handlePointerMove = this.handlePointerMove.bind(this);
     this.handlePointerDown = this.handlePointerDown.bind(this);
     this.handlePointerUp = this.handlePointerUp.bind(this);
     this.handlePointerLeave = this.handlePointerLeave.bind(this);
+    this.seekToOffset = this.seekToOffset.bind(this);
     this.percentToOffset = this.percentToOffset.bind(this);
     this.segmentNum = this.segmentNum.bind(this);
     this.onRulerRef = this.onRulerRef.bind(this);
     this.renderRoute = this.renderRoute.bind(this);
 
-    this.rulerRemaining = React.createRef();
     this.rulerRef = React.createRef();
     this.dragBar = React.createRef();
     this.hoverBead = React.createRef();
@@ -177,8 +175,6 @@ class Timeline extends Component {
   }
 
   componentDidMount() {
-    this.mounted = true;
-    requestAnimationFrame(this.getOffset);
     this.componentDidUpdate({});
 
     if (typeof ResizeObserver !== 'undefined' && this.thumbnailsRef.current) {
@@ -202,18 +198,44 @@ class Timeline extends Component {
   }
 
   componentWillUnmount() {
-    this.mounted = false;
+    this.removeDragListeners();
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
     }
   }
 
+  seekToOffset(offset) {
+    this.props.dispatch(seek(offset));
+  }
+
+  handleKeyDown = (ev) => {
+    const { offset } = this.props;
+    const { zoom } = this.state;
+    const target = { ArrowLeft: offset - 10000, ArrowDown: offset - 10000,
+      ArrowRight: offset + 10000, ArrowUp: offset + 10000, Home: zoom.start, End: zoom.end }[ev.key];
+    if (target === undefined) return;
+    ev.preventDefault();
+    this.seekToOffset(Math.max(zoom.start, Math.min(target, zoom.end)));
+  };
+
+  removeDragListeners() {
+    document.removeEventListener('pointerup', this.handlePointerUp);
+    document.removeEventListener('pointermove', this.handlePointerMove);
+    document.removeEventListener('pointercancel', this.handlePointerCancel);
+  }
+
+  handlePointerCancel = () => {
+    this.removeDragListeners();
+    this.setState({ dragging: null, hoverX: null });
+  };
+
   handleClick(ev) {
     const { dragging } = this.state;
     if (!dragging || Math.abs(dragging[1] - dragging[0]) <= 3) {
       const percent = percentFromPointerEvent(ev);
-      this.props.dispatch(seek(this.percentToOffset(percent)));
+      const offset = this.percentToOffset(percent);
+      this.seekToOffset(offset);
     }
   }
 
@@ -223,8 +245,10 @@ class Timeline extends Component {
     }
 
     ev.preventDefault();
+    this.rulerRef.current.focus();
     document.addEventListener('pointerup', this.handlePointerUp);
     document.addEventListener('pointermove', this.handlePointerMove);
+    document.addEventListener('pointercancel', this.handlePointerCancel);
     this.setState({ dragging: [ev.pageX, ev.pageX] });
   }
 
@@ -245,15 +269,14 @@ class Timeline extends Component {
   }
 
   handlePointerUp(ev) {
-    const { route } = this.props;
+    const { offset, route } = this.props;
 
     // prevent preventDefault for back(3) and forward(4) mouse buttons
     if (ev.button !== 3 && ev.button !== 4) {
       ev.preventDefault();
     }
 
-    document.removeEventListener('pointerup', this.handlePointerUp);
-    document.removeEventListener('pointermove', this.handlePointerMove);
+    this.removeDragListeners();
     const { dragging } = this.state;
     if (!dragging) {
       return;
@@ -267,9 +290,8 @@ class Timeline extends Component {
     const endOffset = Math.round(this.percentToOffset(endPercent));
 
     if (Math.abs(dragging[1] - dragging[0]) > 3) {
-      const offset = currentOffset();
       if (offset < startOffset || offset > endOffset) {
-        this.props.dispatch(seek(startOffset));
+        this.seekToOffset(startOffset);
       }
       const { dispatch } = this.props;
       const startTime = startOffset;
@@ -289,23 +311,6 @@ class Timeline extends Component {
     this.rulerRef.current = el;
     if (el) {
       el.addEventListener('touchstart', (ev) => ev.stopPropagation());
-    }
-  }
-
-  getOffset() {
-    if (!this.mounted) {
-      return;
-    }
-    requestAnimationFrame(this.getOffset);
-    let offset = currentOffset();
-    if (this.seekIndex) {
-      offset = this.seekIndex;
-    }
-    offset = Math.floor(offset);
-    const percent = this.offsetToPercent(offset);
-    if (this.rulerRemaining.current && this.rulerRemaining.current.parentElement) {
-      this.rulerRemaining.current.style.left = `${Math.floor(10000 * percent) / 100}%`;
-      this.rulerRemaining.current.style.width = `${100 - Math.floor(10000 * percent) / 100}%`;
     }
   }
 
@@ -377,7 +382,7 @@ class Timeline extends Component {
 
   render() {
     const { classes, hasRuler, className, route, thumbnailsVisible } = this.props;
-    const { thumbnail, hoverX, dragging } = this.state;
+    const { thumbnail, hoverX, dragging, zoom } = this.state;
 
     const hasRulerCls = hasRuler ? 'hasRuler' : '';
 
@@ -409,6 +414,7 @@ class Timeline extends Component {
     }
 
     const baseWidthStyle = { width: '100%' };
+    const playedPercent = Math.max(0, Math.min(100, 100 * this.offsetToPercent(this.props.offset)));
 
     return (
       <div className={className}>
@@ -433,6 +439,10 @@ class Timeline extends Component {
               <div
                 aria-label="Drive timeline"
                 role="slider"
+                aria-valuemin={zoom.start / 1000}
+                aria-valuemax={zoom.end / 1000}
+                aria-valuenow={this.props.offset / 1000}
+                aria-valuetext={`${Math.round(this.props.offset / 1000)} seconds into drive`}
                 tabIndex={0}
                 ref={ this.onRulerRef }
                 className={classes.ruler}
@@ -440,8 +450,9 @@ class Timeline extends Component {
                 onPointerUp={this.handlePointerUp}
                 onPointerMove={this.handlePointerMove}
                 onPointerLeave={this.handlePointerLeave}
+                onKeyDown={this.handleKeyDown}
               >
-                <div ref={this.rulerRemaining} className={classes.rulerRemaining} />
+                <div className={classes.rulerRemaining} style={{ left: `${playedPercent}%`, width: `${100 - playedPercent}%` }} />
                 { draggerStyle && <div ref={this.dragBar} className={classes.dragHighlight} style={draggerStyle} /> }
               </div>
               { hoverString && (
@@ -457,9 +468,9 @@ class Timeline extends Component {
   }
 }
 
-const stateToProps = (state) => ({
+const stateToProps = (state, { hasRuler }) => ({
+  offset: hasRuler ? state.offset : 0,
   zoom: state.zoom,
-  loop: state.loop,
 });
 
 export default connect(stateToProps)(withStyles(styles)(Timeline));

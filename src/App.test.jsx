@@ -39,20 +39,6 @@ vi.mock('react-map-gl', () => ({
   Source: ({ children }) => children,
   WebMercatorViewport: class {},
 }));
-vi.mock('react-player/file', () => ({
-  default: React.forwardRef((_props, ref) => {
-    React.useImperativeHandle(ref, () => ({
-      getCurrentTime: () => 0,
-      getDuration: () => 60,
-      getInternalPlayer: () => ({
-        buffered: { end: () => 60, length: 1, start: () => 0 },
-        pause: vi.fn(), paused: true, play: vi.fn(async () => undefined), playbackRate: 1, readyState: 4,
-      }),
-      seekTo: vi.fn(),
-    }));
-    return <div data-testid="video-player" />;
-  }),
-}));
 vi.mock('barcode-detector/ponyfill', () => ({ BarcodeDetector: class { detect() { return []; } } }));
 
 const FIRST = 'aaaaaaaaaaaaaaaa';
@@ -147,6 +133,10 @@ async function renderApp(pathname, options = {}) {
 
 describe('whole-app behavior', () => {
   beforeAll(() => {
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('probably');
+    vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
     vi.stubGlobal('fetch', vi.fn(mockFetch));
     vi.stubGlobal('PointerEvent', MouseEvent);
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
@@ -239,6 +229,30 @@ describe('whole-app behavior', () => {
     const { history } = await renderApp(pathname, { authenticated: false });
     expect(await screen.findByText('Sign in with Google')).toBeVisible();
     expect(history.location.pathname).toBe(pathname);
+  });
+
+  test('playback controls stay usable after an error and map switching keeps the video mounted', async () => {
+    const { store } = await renderApp(`/${FIRST}/${LOG}/10/50`);
+    const video = screen.getByLabelText('Drive video');
+    const timeline = screen.getByRole('slider', { name: 'Drive timeline' });
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase play speed by 1 step' }));
+    expect(store.getState()).toMatchObject({ isPlaying: false, desiredPlaySpeed: 2 });
+    fireEvent.error(video);
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+    fireEvent.keyDown(timeline, { key: 'ArrowRight' });
+    expect(store.getState()).toMatchObject({ offset: 20000, isPlaying: false, videoStatus: 'loading' });
+    fireEvent.keyDown(timeline, { key: 'End' });
+    expect(timeline).toHaveAttribute('aria-valuenow', '50');
+    fireEvent.keyDown(timeline, { key: 'Home' });
+    expect(timeline).toHaveAttribute('aria-valuenow', '10');
+    fireEvent.click(screen.getByRole('button', { name: 'Map', exact: true }));
+    expect(screen.getByRole('button', { name: 'Map', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Video', exact: true }));
+    expect(screen.getByLabelText('Drive video')).toBe(video);
+    fireEvent.click(screen.getByRole('button', { name: 'Unmute' }));
+    expect(video.muted).toBe(false);
+    expect(screen.getByRole('button', { name: 'Mute' })).toBeEnabled();
   });
 
   test('a missing public route redirects to login with the requested route', async () => {

@@ -200,6 +200,8 @@ async function fetchFixtures() {
       },
     }))),
     sprite: Buffer.from(await sprite.arrayBuffer()),
+    video: await readFile(new URL('../public/demo-video/0/qcamera.ts', import.meta.url)),
+    hls: await readFile(new URL('../node_modules/hls.js/dist/hls.min.js', import.meta.url)),
   };
 }
 
@@ -309,6 +311,9 @@ function jsonResponse(request, value, status = 200) {
 async function mockGalleryRequest(request, origin, pageName, fixtures) {
   const url = new URL(request.url());
   if (url.origin === origin) {
+    if (url.pathname === '/__gallery-video.ts') {
+      return request.respond({ status: 200, contentType: 'video/mp2t', body: fixtures.video });
+    }
     const eventsMatch = url.pathname.match(/^\/__gallery-route\/(\d+)\/events\.json$/);
     if (eventsMatch) return jsonResponse(request, fixtures.events[Number(eventsMatch[1])] ?? []);
     if (/^\/__gallery-route\/\d+\/sprite\.jpg$/.test(url.pathname)) {
@@ -324,18 +329,7 @@ async function mockGalleryRequest(request, origin, pageName, fixtures) {
     return request.respond({
       status: 200,
       contentType: 'text/javascript',
-      body: `
-        class GalleryHls {
-          static Events = { ERROR: 'error', MANIFEST_PARSED: 'manifestParsed' };
-          static isSupported() { return true; }
-          constructor() { this.handlers = {}; }
-          on(name, handler) { this.handlers[name] = handler; }
-          loadSource() { queueMicrotask(() => this.handlers.manifestParsed?.()); }
-          attachMedia() {}
-          destroy() {}
-        }
-        window.Hls = GalleryHls;
-      `,
+      body: fixtures.hls,
     });
   }
 
@@ -377,7 +371,7 @@ async function mockGalleryRequest(request, origin, pageName, fixtures) {
         status: 200,
         contentType: 'application/vnd.apple.mpegurl',
         headers: { 'Access-Control-Allow-Origin': '*' },
-        body: '#EXTM3U\n#EXT-X-ENDLIST\n',
+        body: `#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:60\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:60,\n${origin}/__gallery-video.ts\n#EXT-X-ENDLIST\n`,
       });
     }
     // Keep the pairing request pending long enough to capture its loading modal.
@@ -671,6 +665,19 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
       { timeout: 15000 },
       { selector: pageState.readySelector, expectedText: pageState.readyText },
     );
+    if (pageState.name === 'drive') {
+      await page.waitForFunction(() => document.querySelector('video')?.readyState >= 2, { timeout: 15000 });
+      await page.evaluate(() => {
+        document.querySelector('button[aria-label="Pause"]')?.click();
+        const video = document.querySelector('video');
+        video.pause();
+        video.currentTime = 0;
+      });
+      await page.waitForFunction(() => {
+        const video = document.querySelector('video');
+        return video.paused && !video.seeking && video.readyState >= 2;
+      }, { timeout: 15000 });
+    }
     await page.evaluate(async () => {
       if (document.fonts) await document.fonts.ready;
       await Promise.all(Array.from(document.images, (image) => {
