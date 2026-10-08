@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 8
     env:
       QA_CANDIDATE_SHA: 893a48a29758e1591d926aed63ac75baf3dfec1f
-      QA769_OUTPUT: ${{ runner.temp }}/qa769
+      QA769_OUTPUT: qa769-results
       PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
       PUPPETEER_SKIP_DOWNLOAD: 'true'
       VITE_APP_GIT_SHA: ${{ github.sha }}
@@ -46,6 +46,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: qa769-chrome-${{ github.run_id }}
-          path: ${{ runner.temp }}/qa769
+          path: qa769-results
           if-no-files-found: warn
           retention-days: 7
