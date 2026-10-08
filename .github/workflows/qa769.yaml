@@ -1,0 +1,51 @@
+# Validation only: copy to .github/workflows/qa769.yaml on qa/769-playback.
+name: qa769-playback
+
+on:
+  push:
+    branches: [qa/769-playback]
+
+permissions:
+  contents: read
+
+jobs:
+  chrome:
+    if: github.ref == 'refs/heads/qa/769-playback'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      QA_CANDIDATE_SHA: 893a48a29758e1591d926aed63ac75baf3dfec1f
+      QA769_OUTPUT: ${{ runner.temp }}/qa769
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      VITE_APP_GIT_SHA: ${{ github.sha }}
+      VITE_POSTHOG_KEY: ''
+      VITE_POSTHOG_HOST: ''
+      E2E: 'true'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install frozen candidate dependencies
+        run: |
+          mkdir -p "$QA769_OUTPUT"
+          bun install --frozen-lockfile 2>&1 | tee "$QA769_OUTPUT/install.log"
+      - name: Install gallery-matched browser tools without saving dependencies
+        run: bun add --no-save --trust puppeteer@24.16.0 pngjs@7.0.0 2>&1 | tee "$QA769_OUTPUT/browser-tools.log"
+      - name: Exercise production playback through the UI
+        run: node scripts/qa769.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
+      - name: Upload diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa769-chrome-${{ github.run_id }}
+          path: ${{ runner.temp }}/qa769
+          if-no-files-found: warn
+          retention-days: 7
