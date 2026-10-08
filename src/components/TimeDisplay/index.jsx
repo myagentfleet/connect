@@ -49,7 +49,6 @@ const styles = (theme) => ({
       flexWrap: 'wrap',
       justifyContent: 'center',
       '&.isThin': { height: 'auto', padding: 8 },
-      '& $currentTime': { flexBasis: '100%', order: -1, margin: '0 0 4px' },
     },
   },
   desiredPlaySpeedContainer: {
@@ -98,6 +97,11 @@ const styles = (theme) => ({
     fontWeight: 500,
     display: 'block',
     flexGrow: 1,
+    '@media (max-width: 400px)': {
+      flexBasis: '100%',
+      order: -1,
+      margin: '0 0 4px',
+    },
   },
 });
 
