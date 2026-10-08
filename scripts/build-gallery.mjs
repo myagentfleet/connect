@@ -666,12 +666,16 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
       { selector: pageState.readySelector, expectedText: pageState.readyText },
     );
     if (pageState.name === 'drive') {
-      await page.waitForFunction(() => document.querySelector('video')?.readyState >= 2, { timeout: 15000 });
+      await page.waitForFunction(() => {
+        const video = document.querySelector('video');
+        return video?.readyState >= 2 && video.buffered.length > 0;
+      }, { timeout: 15000 });
       await page.evaluate(() => {
         document.querySelector('button[aria-label="Pause"]')?.click();
         const video = document.querySelector('video');
         video.pause();
-        video.currentTime = 0;
+        // The first decoded frame can follow time zero after HLS remuxing.
+        video.currentTime = video.buffered.start(0);
       });
       await page.waitForFunction(() => {
         const video = document.querySelector('video');
