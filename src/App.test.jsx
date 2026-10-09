@@ -104,7 +104,8 @@ async function mockFetch(input, init = {}) {
   }
   if (url.pathname.endsWith('/subscription') || url.pathname.endsWith('/subscribe_info')) return json(null);
   if (url.pathname.endsWith('/events.json') || url.pathname.endsWith('/coords.json')) return json([]);
-  if (url.pathname.endsWith('/files') || url.pathname.endsWith('/preserved')) return json(url.pathname.endsWith('/files') ? {} : []);
+  if (url.pathname.endsWith('/files')) return json(options.files ?? {});
+  if (url.pathname.endsWith('/preserved') || url.pathname.endsWith('/athena_offline_queue')) return json([]);
   if (url.hostname === 'athena.comma.ai') return json({ jsonrpc: '2.0', id: 0, result: {} });
   throw new Error(`Unhandled request: ${init.method || 'GET'} ${url.href}`);
 }
@@ -255,6 +256,26 @@ describe('whole-app behavior', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Unmute' }));
     expect(video.muted).toBe(false);
     expect(screen.getByRole('button', { name: 'Mute' })).toBeEnabled();
+  });
+
+  test.each([
+    ['Files', 'Road camera'], ['More info', 'View in useradmin'],
+  ])('%s restores trigger focus after loading files and closing with Escape', async (label, content) => {
+    const route = `${FIRST}|${LOG}`;
+    const url = `https://routes.example.com/${FIRST}/${LOG}/0/fcamera.hevc?sig=original`;
+    const menuId = label === 'Files' ? 'menu-download' : 'menu-info';
+    const { store } = await renderApp(`/${FIRST}/${LOG}`, { files: { cameras: [url] } });
+    const trigger = screen.getByRole('button', { name: label, exact: true });
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(await screen.findByText(content)).toBeVisible();
+    await waitFor(() => expect(store.getState().files?.[`${route}--0/cameras`]).toEqual({ url }));
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(menuId)).toContainElement(document.activeElement);
+    fireEvent.keyDown(document.activeElement, { key: 'Escape', keyCode: 27 });
+    await waitFor(() => expect(document.getElementById(menuId)).toBeNull());
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveFocus();
   });
 
   test('a missing public route redirects to login with the requested route', async () => {

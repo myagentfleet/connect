@@ -21,14 +21,9 @@ jobs:
           - revision: candidate
             ref: ''
             capture_only: 'false'
-          - revision: upstream
-            ref: 109edb39ffa7a4ad3c38788ca2f39a286538ff07
-            capture_only: 'true'
-          - revision: previous
-            ref: c0772ff6641ce93bc16a6fc884a0959da4a9c17b
-            capture_only: 'true'
     env:
-      FINAL_CANDIDATE_SHA: 4c8006ec347bbf4b8bf18fef7ef4ab4f50828db7
+      FINAL_CANDIDATE_SHA: 51b322ec2b1e4319ca51955fd47c0a1bb935f7ce
+      QA769_CASE: controls-and-responsive
       QA769_HEADLESS: 'false'
       QA769_REVISION_LABEL: ${{ matrix.revision }}
       QA769_CAPTURE_ONLY: ${{ matrix.capture_only }}

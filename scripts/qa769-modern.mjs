@@ -135,16 +135,45 @@ async function adjacentMenus(page) {
   for (const [label, id, expectedText] of [['Files', 'menu-download', 'Road camera'], ['More info', 'menu-info', 'View in useradmin']]) {
     const trigger = await page.waitForFunction((text) => [...document.querySelectorAll('.DriveView button')]
       .find((element) => element.textContent.trim() === text), {}, label);
-    await trigger.asElement().focus();
-    await page.keyboard.press('Enter');
-    await page.waitForSelector(`#${id}`, { visible: true });
-    assert.equal(await trigger.evaluate((element) => element.getAttribute('aria-expanded')), 'true', `${label} reports its open state`);
-    await page.waitForFunction(({ id, text }) => document.getElementById(id)?.textContent.includes(text), {}, { id, text: expectedText });
-    await capture(page, label === 'Files' ? 'files-menu' : 'route-info-menu', true);
-    await page.keyboard.press('Escape');
-    await page.waitForSelector(`#${id}`, { hidden: true });
-    await page.waitForFunction((element) => document.activeElement === element, {}, trigger);
-    assert.equal(await trigger.evaluate((element) => element.getAttribute('aria-expanded')), 'false', `${label} closes and restores trigger focus`);
+    const recordFocus = async (phase) => {
+      const snapshot = await trigger.evaluate((element, menuId) => {
+        const describe = (node) => node && ({ tag: node.tagName, id: node.id, label: node.getAttribute('aria-label'),
+          text: node.textContent.trim().slice(0, 100), connected: node.isConnected, tabIndex: node.tabIndex,
+          ariaHiddenAncestor: node.closest('[aria-hidden="true"]')?.outerHTML.slice(0, 250) || null });
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return { at: performance.now(), documentFocused: document.hasFocus(), activeElement: describe(document.activeElement),
+          trigger: { ...describe(element), disabled: element.disabled, ariaDisabled: element.getAttribute('aria-disabled'),
+            display: style.display, visibility: style.visibility, rect: rect.toJSON(), inertAncestor: Boolean(element.closest('[inert]')),
+            focusable: element.isConnected && !element.disabled && element.tabIndex >= 0 && style.display !== 'none'
+              && style.visibility === 'visible' && rect.width > 0 && rect.height > 0 && !element.closest('[inert]') },
+          menu: describe(document.getElementById(menuId)), triggerFocused: document.activeElement === element };
+      }, id);
+      const entry = { label, phase, ...snapshot };
+      report.menuFocus ||= []; report.menuFocus.push(entry);
+      console.log(`MENU_FOCUS ${JSON.stringify(entry)}`);
+      await writeFile(resolve(output, 'report.json'), JSON.stringify(report, null, 2));
+    };
+    try {
+      await trigger.asElement().focus();
+      await recordFocus('before-open');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector(`#${id}`, { visible: true });
+      assert.equal(await trigger.evaluate((element) => element.getAttribute('aria-expanded')), 'true', `${label} reports its open state`);
+      await page.waitForFunction(({ id, text }) => document.getElementById(id)?.textContent.includes(text), {}, { id, text: expectedText });
+      await recordFocus('ready');
+      await capture(page, label === 'Files' ? 'files-menu' : 'route-info-menu', true);
+      await page.keyboard.press('Escape');
+      await recordFocus('after-escape');
+      await page.waitForSelector(`#${id}`, { hidden: true });
+      await page.waitForFunction((menuId) => !document.getElementById(menuId), {}, id);
+      await recordFocus('after-unmount');
+      await page.waitForFunction((element) => document.activeElement === element, {}, trigger);
+      assert.equal(await trigger.evaluate((element) => element.getAttribute('aria-expanded')), 'false', `${label} closes and restores trigger focus`);
+    } catch (error) {
+      await recordFocus('failure').catch((diagnosticError) => console.log(`MENU_FOCUS_DIAGNOSTIC_ERROR ${diagnosticError.message}`));
+      throw error;
+    }
   }
 }
 
