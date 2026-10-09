@@ -1,0 +1,470 @@
+{
+  "reviewVersion": 2,
+  "reviewDate": "2026-10-09",
+  "status": "partial-fulfillment-with-explicit-open-requirements",
+  "fullIssueRequirementsSatisfied": false,
+  "sourceSha": "fd173c1c153e1f893494963675472ad4e448a7ce",
+  "previousBehavioralSourceSha": "0996a76f1a3d963cde7f0d10b211c5cd02fb0c0e",
+  "comparisonBaseSha": "109edb39ffa7a4ad3c38788ca2f39a286538ff07",
+  "repository": "myagentfleet/connect",
+  "sourceUrl": "https://github.com/myagentfleet/connect/commit/fd173c1c153e1f893494963675472ad4e448a7ce",
+  "issueUrl": "https://github.com/commaai/connect/issues/769",
+  "upstreamPrAuthorized": false,
+  "upstreamPrOpened": false,
+  "reconstruction": {
+    "reconstructedFrom": "Completed independent source, requirement, CI-report, and visual review recorded before the workspace reset.",
+    "sourceFilesModified": false,
+    "testsRerun": false,
+    "newBrowserObservations": false,
+    "note": "The original local review records were lost during the workspace reset. This record reconstructs their findings; it does not claim byte identity with those records. Restored archive integrity and package completeness are recorded separately in status.json and SHA256SUMS."
+  },
+  "guidance": {
+    "issueTitle": "make video playback beautiful",
+    "statusAtPriorReview": "open",
+    "priorReviewDate": "2026-10-09",
+    "issueRequirements": [
+      "Let the native video element drive playback state.",
+      "Provide reliable loading, fast seeking, and handling of error cases.",
+      "Address iOS glitches with routes containing audio.",
+      "Retain the map and thumbnail timeline while behaving like a regular video player.",
+      "Remove old architecture hacks and produce a net-red diff.",
+      "Use tasteful styling consistent with the site.",
+      "Support desktop, iOS, and Android browsers and installed iOS/Android PWAs.",
+      "Use demo routes and tests without requiring a comma device.",
+      "Iterate on design and understand every changed line before opening a pull request."
+    ],
+    "userAdditionalRequirement": "Make the interface more visually interactive and modern, with careful design, interaction review, and visual inspection.",
+    "readmeUrl": "https://github.com/commaai/connect/blob/109edb39ffa7a4ad3c38788ca2f39a286538ff07/README.md",
+    "readmeGuidance": [
+      "Use best practices.",
+      "Write test cases.",
+      "Keep files small and clean.",
+      "Use branches and pull requests to isolate work and break it into contributions that can merge quickly."
+    ],
+    "repositoryConventions": [
+      "React class components with lifecycle callbacks, state, and props.",
+      "Redux for shared/global state with explicit predefined actions; local state for component concerns.",
+      "Material UI and connected-react-router."
+    ],
+    "additionalTrackedGuidanceAtReview": {
+      "agentsMdFound": false,
+      "contributingFileFound": false,
+      "pullRequestTemplateFound": false
+    },
+    "maintainerWaiverForNetRedFound": false
+  },
+  "changeSize": {
+    "comparedFrom": "109edb39ffa7a4ad3c38788ca2f39a286538ff07",
+    "comparedTo": "fd173c1c153e1f893494963675472ad4e448a7ce",
+    "changedFiles": 48,
+    "textAdditions": 2238,
+    "textDeletions": 1279,
+    "netTextLines": 959,
+    "binaryFixturesAdded": 6,
+    "binaryFixtureDescription": "Three qcamera.ts files and three sprite.jpg files; binary bytes are excluded from text-line counts.",
+    "literalNetRedSatisfied": false,
+    "categories": {
+      "tests": {
+        "additions": 1142,
+        "deletions": 153,
+        "net": 989,
+        "definition": "Changed text paths containing .test."
+      },
+      "nonTestText": {
+        "additions": 1096,
+        "deletions": 1126,
+        "net": -30,
+        "definition": "All changed text paths not containing .test."
+      },
+      "productionSourceExcludingDemo": {
+        "additions": 901,
+        "deletions": 1083,
+        "net": -182,
+        "definition": "Changed src/ text excluding .test. files and src/api/demo.js."
+      }
+    },
+    "interpretation": "Production and non-test reductions do not satisfy the literal whole-diff requirement. Tests are not assumed exempt. A legitimate independent demo/fixtures/documentation split alone is insufficient.",
+    "simplificationReview": "A verified 51-line dead Media cleanup is included. The completed review found no credible small cleanup that removes the remaining growth while preserving useful regression coverage and readability. No tests were removed, code minified, or files shuffled solely to alter counts."
+  },
+  "matrix": [
+    {
+      "id": "video-driven-state",
+      "requirement": "The native video element drives playback state.",
+      "status": "implemented",
+      "reason": "video.currentTime drives shared progress for the map and timeline. An explicit seek command is distinct from progress publication, avoiding feedback seeks. Requested playback intent during buffering/error is not a second clock.",
+      "evidence": [
+        "source-review",
+        "final-desktop",
+        "preceding-full-chrome"
+      ]
+    },
+    {
+      "id": "loading-seeking-errors",
+      "requirement": "Reliable loading, seeking, and error handling.",
+      "status": "verified-in-enumerated-scenarios",
+      "reason": "Coverage includes missing first/middle segments, manifest failures, Retry, a new healthy seek, prefetch, loops, pre-metadata seeks, route reset, and navigation cancellation. A bounded native missed-seek guard reports an unavailable selected time rather than publishing an incorrect settled clock.",
+      "limit": "An actionable unavailable-time error is not restoration of missing media. The native guard is conservative and does not classify all low-readiness or empty-seekable failures.",
+      "evidence": [
+        "preceding-full-chrome",
+        "preceding-native",
+        "final-native-touch"
+      ]
+    },
+    {
+      "id": "map-and-timeline",
+      "requirement": "Keep the map and thumbnail timeline.",
+      "status": "implemented-and-exercised",
+      "reason": "The timeline retains preview, loop, and keyboard interactions. Map mode hides loading/error overlays without replacing the video element; time, marker, and frame state are retained, and Video restores the appropriate status.",
+      "limit": "Fixture map behavior is covered; live map tile availability was not independently certified.",
+      "evidence": [
+        "source-review",
+        "preceding-full-chrome",
+        "final-desktop",
+        "final-native-touch"
+      ]
+    },
+    {
+      "id": "responsive-design",
+      "requirement": "Tasteful, modern design consistent with connect.",
+      "status": "reviewed-in-measured-states",
+      "reason": "The dark palette, grouped controls, primary circular action, narrow timestamp layout, desktop map relationship, menus, focus, and touch/desktop hover were designed and inspected. The four stable layout captures match the preceding source exactly after the final CSS-only fix.",
+      "limit": "Measured visual and keyboard checks are not comprehensive assistive-technology certification or proof of every possible viewport/state.",
+      "evidence": [
+        "final-desktop",
+        "final-native-touch",
+        "desktop-visual-review"
+      ]
+    },
+    {
+      "id": "desktop-platforms",
+      "requirement": "Works across desktop browsers.",
+      "status": "partial-platform-completion",
+      "reason": "Final-source Chrome unit/lint/build and two design cases passed. The preceding behavioral source passed the full seven Chrome cases. Earlier Firefox, WebKit, and stock Safari investigations provide bounded additional evidence.",
+      "limit": "An intermittent desktop WebKit/MSE startup freeze at 0.164 seconds has not been demonstrated eliminated. Emulated native playback and reference diagnostics are not broad desktop Safari acceptance.",
+      "evidence": [
+        "final-desktop",
+        "preceding-full-chrome",
+        "preceding-native"
+      ]
+    },
+    {
+      "id": "physical-mobile-browsers",
+      "requirement": "Works in iOS and Android browsers.",
+      "status": "not-fully-verified",
+      "reason": "Native HLS recovery and touch UI were exercised using macOS Playwright WebKit with iPhone emulation.",
+      "limit": "No physical iOS or Android browser acceptance run is established by this evidence.",
+      "evidence": [
+        "final-native-touch",
+        "preceding-native"
+      ]
+    },
+    {
+      "id": "installed-mobile-pwas",
+      "requirement": "Works as an installed iOS and Android PWA.",
+      "status": "unverified",
+      "reason": "No installed-device PWA acceptance evidence is available.",
+      "remaining": "Verify installation, foreground/background lifecycle, OS media behavior, and playback/seek/recovery on physical iOS and Android devices."
+    },
+    {
+      "id": "ios-audio",
+      "requirement": "Resolve reported iOS glitches in routes with audio.",
+      "status": "unverified-end-to-end",
+      "reason": "Audio track detection, mute/rate controls, audio fixtures, and the native transport path are covered.",
+      "remaining": "Establish physical audible output, audio/video synchronization, relevant output-route behavior, and resolution of the reported iOS glitch. Current evidence does not prove those outcomes."
+    },
+    {
+      "id": "net-red",
+      "requirement": "A net-red complete diff without architecture hacks.",
+      "status": "unmet",
+      "reason": "The complete 48-file comparison has 2238 text additions and 1279 deletions, a net increase of 959 lines. Production src excluding demo is smaller by 182 lines, but that subtotal is not a waiver of the whole-diff requirement.",
+      "remaining": "Resolve implementation and contribution scope honestly while preserving meaningful regression coverage; a demo-only split does not suffice.",
+      "evidence": [
+        "change-size-audit",
+        "source-review"
+      ]
+    },
+    {
+      "id": "demo-without-device",
+      "requirement": "Test through demo routes without a comma device.",
+      "status": "implemented",
+      "reason": "Deterministic synthetic H.264/AAC MPEG-TS fixtures with burned timestamps, sprites, route data, and genuine missing/repaired responses support reproducible playback checks.",
+      "evidence": [
+        "source-review",
+        "preceding-full-chrome",
+        "preceding-native"
+      ]
+    },
+    {
+      "id": "contribution-structure",
+      "requirement": "Small, clean, tested, reviewable contributions consistent with repository guidance.",
+      "status": "substantial-compliance-submission-scope-pending",
+      "reason": "The player follows existing React/Redux/Material UI conventions, production source shrinks, 169 tests pass, and independent review records concrete design/behavior decisions. QA workflows and review artifacts are separate from application changes.",
+      "proposedStructure": [
+        "Independently useful demo routes, media/sprite fixtures, documentation, and supporting tests.",
+        "Media-driven playback, transport, recovery, timeline/map, and controls with their relevant regression tests.",
+        "Separate source-pinned QA runners, workflows, screenshots, and review evidence."
+      ],
+      "limit": "This logical structure is not an accepted PR plan or a claim that file splitting achieves net red.",
+      "evidence": [
+        "source-review",
+        "final-desktop",
+        "change-size-audit"
+      ]
+    },
+    {
+      "id": "account-and-publication",
+      "requirement": "Use the requested GitHub identity and preserve the publication boundary.",
+      "status": "identity-verified-upstream-submission-not-authorized",
+      "reason": "The final commit author and committer are Agent Fleet <myagentfleet@gmail.com> in the verified myagentfleet/connect fork. No upstream PR is authorized or opened.",
+      "evidence": [
+        "identity-verification"
+      ]
+    }
+  ],
+  "architectureReview": {
+    "videoClock": "The media element owns time; explicit application seeks are distinguished from progress updates.",
+    "sourceLifecycle": "Stale source callbacks and asynchronous play completions are guarded; navigation/unmount cancels work.",
+    "transport": "Native HLS remains available for iOS and fallback; supported other browsers use Hls.js/MSE. Healthy buffered playback/loops survive a failed future prefetch.",
+    "nativeMissedSeekGuard": {
+      "scope": "Actual native adapter, latest normalized target scoped to the active source.",
+      "positiveConditions": [
+        "Settled seeked event with video.seeking false.",
+        "readyState at least 2.",
+        "Actual time differs from requested target by more than 0.5 seconds.",
+        "Nonempty seekable ranges exclude the target with a 0.5-second margin."
+      ],
+      "result": "Pause the media element, retain requested position and playback intent, and report the unavailable-time error before publishing the wrong clock.",
+      "recovery": "Existing explicit Retry or new-seek recovery reloads the source. There is no automatic polling, timer-based repair, or automatic reload.",
+      "lifecycle": "Completed/default targets clear; seek supersession is respected; first-available startup remains possible; late ended events do not restart a failed loop.",
+      "limitation": "Low-ready or empty-seekable events keep previous behavior; this is a bounded detector."
+    },
+    "mapOverlay": "Existing controlsVisible gates loading/error actions in Map mode, preserving the same video element. Hidden Retry is absent from the DOM/tab order; Video restores status.",
+    "finalStyleOnlyChange": "A local hover fallback preserves the white primary button on hover-incapable devices while the later desktop hover rule remains light gray."
+  },
+  "evidenceSnapshot": {
+    "finalDesktop": {
+      "id": "final-desktop",
+      "sourceSha": "fd173c1c153e1f893494963675472ad4e448a7ce",
+      "runId": "37938004740",
+      "runUrl": "https://github.com/myagentfleet/connect/actions/runs/37938004740",
+      "jobId": "113844845260",
+      "qaCommit": "31df5d0d906dece4d6c967ff2505b835cd795396",
+      "artifactId": "11620335347",
+      "archiveSha256": "f6a3844bb5fef3b8e17f4c8cd56e382dfc00d12929a96d8c3c8abdba76199a5f",
+      "archiveIntegrity": "GitHub-supplied digest independently matched during the completed review; restored package verification is recorded separately.",
+      "reportSha256": "ca25d2b81a4a60ffe3d31f1d29bbf5b65d701be17b59939655226af0e90320a3",
+      "passedTests": 169,
+      "testFiles": 17,
+      "lintWarnings": 0,
+      "lintErrors": 0,
+      "productionBuildPassed": true,
+      "browserCaseCount": 2,
+      "browserCases": [
+        "comparison-healthy-player",
+        "controls-and-responsive"
+      ],
+      "browserCasesPassed": 2,
+      "pageErrors": [],
+      "limitation": "Five other Chrome cases were not repeated on this final CSS-only source."
+    },
+    "finalNativeTouch": {
+      "id": "final-native-touch",
+      "sourceSha": "fd173c1c153e1f893494963675472ad4e448a7ce",
+      "runId": "37938052645",
+      "runUrl": "https://github.com/myagentfleet/connect/actions/runs/37938052645",
+      "reportSha256": "008baa958db9c76aa7238bbf97d46bf937c4451cd3410946eceee2911d6d05f8",
+      "browserCaseCount": 2,
+      "browserCases": [
+        "native-missed-seek-retry",
+        "native-missed-seek-seek"
+      ],
+      "browserCasesPassed": 2,
+      "acceptanceRun": false,
+      "environment": "macOS Playwright-patched WebKit with iPhone emulation and native HLS; not physical iOS.",
+      "hlsJsUsed": false,
+      "requestVideoFrameCallbackUsed": false,
+      "touchStyleOracle": "Match hover:none; require the primary button still hovered, not active, and white before and after screenshots.",
+      "artifactMetadataNote": "Archive ID/digest were not retained in this reconstructed subreview; use the restored status.json inventory."
+    },
+    "precedingFullChrome": {
+      "id": "preceding-full-chrome",
+      "sourceSha": "0996a76f1a3d963cde7f0d10b211c5cd02fb0c0e",
+      "reportSha256": "6c1c2f176eb6e99df53ffa474e48ef133c8d48ee59ca4e773c92ab304ee86654",
+      "browserCaseCount": 7,
+      "browserCasesPassed": 7,
+      "browserCases": [
+        "comparison-healthy-player",
+        "controls-and-responsive",
+        "missing-first-and-retry",
+        "natural-chrome-middle-gap-recovery",
+        "forced-mse-prefetch-and-loops",
+        "startup-seek-and-route-reset",
+        "navigation-cancellation-and-loading"
+      ],
+      "pageErrors": [],
+      "runMetadataNote": "Run ID was not retained in this reconstructed subreview; use the restored status.json inventory."
+    },
+    "precedingNative": {
+      "id": "preceding-native",
+      "sourceSha": "0996a76f1a3d963cde7f0d10b211c5cd02fb0c0e",
+      "runId": "37936618330",
+      "runUrl": "https://github.com/myagentfleet/connect/actions/runs/37936618330",
+      "artifactId": "11618751816",
+      "archiveSha256": "8ed7a57ab392b16c44f6652ea35d7b096b666909c26c61796fe4d7a7939576e4",
+      "reportSha256": "31819204d774ec0187624041eac2a97e7dd26cf380f5f8f6e653df8911c6dbce",
+      "workflowSucceeded": true,
+      "acceptanceRun": false,
+      "browserCaseCount": 7,
+      "diagnosticObservedCases": [
+        "native-ui-pixels-healthy-75",
+        "native-ui-pixels-healthy-125",
+        "native-ui-pixels-repaired-middle-75"
+      ],
+      "passedCases": [
+        "native-first-available-startup",
+        "native-missed-seek-retry",
+        "native-missed-seek-seek",
+        "native-manifest-error-and-repaired-retry"
+      ],
+      "environment": "macOS Playwright-patched WebKit with iPhone emulation and native HLS.",
+      "visualReview": "The native reviewer examined 18 PNGs; all were readable. Twelve readable burned-frame images matched sampled clocks within 0.6 seconds, and five requested paused/recovered target images also matched within 0.6 seconds. Fifteen fixtures were hashed.",
+      "knownDefectAtThisSource": "Three resumed captures showed the primary button's white circle absent under sticky touch hover; fd173c1 fixes that styling.",
+      "measurementLimitations": [
+        "The inherited manifest-retry case uses the shorter 200 ms / 0.15 s playback check.",
+        "New startup/recovery cases use at least two seconds of clock/counter observation with a later sample window.",
+        "First paused screenshots follow six paused samples spanning at least one second.",
+        "Recovery measurements follow error screenshots and do not establish screenshot-free recovery.",
+        "The report's seven cases include three observations, not seven platform acceptance passes."
+      ]
+    },
+    "upstreamComparison": {
+      "runId": "37891933708",
+      "runUrl": "https://github.com/myagentfleet/connect/actions/runs/37891933708",
+      "role": "Retained upstream visual comparison restored by the package owner.",
+      "metadataNote": "Use status.json for the restored artifact's exact source, identity, and digest."
+    }
+  },
+  "desktopVisualReview": {
+    "id": "desktop-visual-review",
+    "sourceSha": "fd173c1c153e1f893494963675472ad4e448a7ce",
+    "predecessorSha": "0996a76f1a3d963cde7f0d10b211c5cd02fb0c0e",
+    "screenshotManifestEntries": 23,
+    "uniquePngFiles": 22,
+    "decodedPngFiles": 22,
+    "missingManifestFiles": 0,
+    "unreportedPngFiles": 0,
+    "duplicateManifestFilename": "speed-menu-keyboard-390.png",
+    "independentlyViewedCurrentFiles": [
+      "comparison-video-320.png",
+      "comparison-video-390.png",
+      "comparison-video-1280.png",
+      "comparison-video-1600.png",
+      "primary-control-hover-390.png",
+      "files-menu-390.png",
+      "route-info-menu-390.png"
+    ],
+    "stableComparison": {
+      "nominalWidths": [
+        320,
+        390,
+        1280,
+        1600
+      ],
+      "pixelIdenticalToPrecedingSource": true,
+      "capturedDimensions": [
+        [
+          305,
+          844
+        ],
+        [
+          375,
+          844
+        ],
+        [
+          1265,
+          801
+        ],
+        [
+          1585,
+          801
+        ]
+      ],
+      "meaning": "The final CSS-only patch preserves these measured layouts; this is not a claim of identity to upstream."
+    },
+    "primaryHoverBeforeAndAfter": {
+      "hovered": true,
+      "hoverCapable": true,
+      "background": "rgb(229, 233, 236)",
+      "color": "rgb(12, 14, 15)"
+    },
+    "moreInfo": {
+      "opacity": 1,
+      "transform": "matrix(1, 0, 0, 1, 0, 0)",
+      "animations": [],
+      "bounds": {
+        "x": 16,
+        "y": 181,
+        "width": 296.390625,
+        "height": 113,
+        "right": 312.390625,
+        "bottom": 294
+      },
+      "popupRegionPixelIdenticalToPrecedingSource": true,
+      "clippingOrOverlapObserved": false,
+      "note": "The full screenshot differs only in the underlying burned video timestamp, outside the popup comparison."
+    },
+    "files": {
+      "visibleGeometryAndContentsPreserved": true,
+      "clippingOrOverlapObserved": false,
+      "popupComparisonChangedPixels": 6609,
+      "maximumRgbChannelDifference": 1,
+      "fullScreenshotPixelIdentityClaimed": false
+    },
+    "focus": {
+      "filesTriggerFocusRestored": true,
+      "moreInfoTriggerFocusRestored": true,
+      "keyboardJumpBackVisible": true,
+      "keyboardOutlineStyle": "solid",
+      "keyboardOutlineWidthPx": 2,
+      "evidenceType": "Runtime assertions; the current keyboard-focus screenshot was not independently re-viewed."
+    },
+    "limitations": [
+      "Seven current images were independently viewed; all 22 unique PNGs were decoded, not all visually inspected by this reviewer.",
+      "The final native touch screenshots have a separate native reviewer; this desktop review does not claim independent inspection of them.",
+      "Files-menu inspection does not verify completed upload/download operations.",
+      "No new image inspection or pixel computation was performed during reconstruction."
+    ]
+  },
+  "identity": {
+    "sourceSha": "fd173c1c153e1f893494963675472ad4e448a7ce",
+    "author": {
+      "name": "Agent Fleet",
+      "email": "myagentfleet@gmail.com"
+    },
+    "committer": {
+      "name": "Agent Fleet",
+      "email": "myagentfleet@gmail.com"
+    },
+    "fork": "myagentfleet/connect",
+    "sourceCommitSubject": "Keep the primary playback button visible after touch interactions",
+    "verification": "Both author and committer were independently checked in the completed source review. The package owner re-read GitHub after the workspace reset and confirmed final source and identity unchanged.",
+    "upstreamSubmission": "No upstream PR has been authorized or opened."
+  },
+  "packageFiles": {
+    "guide": "README.md",
+    "screenshotViewer": "index.html",
+    "artifactInventory": "status.json",
+    "requirementsRecord": "requirements-review.json",
+    "reviewDraft": "PR_DRAFT.md",
+    "evidenceArchive": "evidence.zip",
+    "checksums": "SHA256SUMS"
+  },
+  "openAcceptanceItems": [
+    "Meet the literal complete-diff net-red requirement through an honest maintainable implementation and contribution scope.",
+    "Obtain physical iOS and Android browser acceptance evidence.",
+    "Obtain installed iOS and Android PWA lifecycle/playback evidence.",
+    "Verify the reported iOS audio glitch end-to-end, including audible output and synchronization.",
+    "Give the intermittent desktop WebKit/MSE startup observation a bounded, evidence-supported disposition."
+  ],
+  "conclusion": "The candidate is implemented and extensively reviewed in the listed environments, but full issue #769 completion is not established. The whole-patch net-red requirement and physical mobile/PWA/audio evidence remain open. Source-pinned diagnostic, counter, and screenshot successes must not be generalized to untested platform acceptance."
+}
