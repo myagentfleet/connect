@@ -45,6 +45,9 @@ const media = (page) => page.locator(VIDEO).evaluate((video) => ({
   width: video.videoWidth, height: video.videoHeight, frames: video.getVideoPlaybackQuality?.().totalVideoFrames ?? null,
   presentedFrames: globalThis.qaFrames.get(video) ?? null,
   presentedFrame: globalThis.qaLastFrame.get(video) ?? null,
+  timelineTime: Number(document.querySelector('[aria-label="Drive timeline"]')?.getAttribute('aria-valuenow')),
+  loading: Boolean(document.querySelector('[aria-label="Loading video"]')),
+  retryVisible: [...document.querySelectorAll('button')].some((button) => button.textContent.trim() === 'Retry'),
   currentSrc: video.currentSrc, transport: video.currentSrc.startsWith('blob:') ? 'MSE' : 'native URL',
   hlsModuleLoaded: performance.getEntriesByType('resource').some(({ name }) => /\/hls-[^/]+\.js/.test(name)),
   buffered: Array.from({ length: video.buffered.length }, (_, i) => [video.buffered.start(i), video.buffered.end(i)]),
@@ -235,24 +238,41 @@ async function main() {
           performance.setResourceTimingBufferSize(3000);
           globalThis.qaEvents = []; globalThis.qaFrames = new WeakMap();
           globalThis.qaLastFrame = new WeakMap(); globalThis.qaFrameMetadata = []; let nextId = 0;
+          const observers = new WeakMap();
+          const stopFrames = (video) => {
+            const observer = observers.get(video);
+            if (!observer) return;
+            observer.cancelled = true;
+            if (observer.handle !== null) video.cancelVideoFrameCallback(observer.handle);
+            observer.handle = null;
+          };
+          const startFrames = (video) => {
+            if (!video.requestVideoFrameCallback) return;
+            stopFrames(video);
+            const observer = { generation: (observers.get(video)?.generation || 0) + 1, cancelled: false, handle: null };
+            observers.set(video, observer);
+            const frame = (at, metadata) => {
+              if (observer.cancelled) return;
+              globalThis.qaFrames.set(video, (globalThis.qaFrames.get(video) || 0) + 1);
+              const sample = { id: video.dataset.qaVideo, generation: observer.generation, at, mediaTime: metadata.mediaTime,
+                presentedFrames: metadata.presentedFrames, expectedDisplayTime: metadata.expectedDisplayTime,
+                currentTime: video.currentTime, paused: video.paused };
+              globalThis.qaLastFrame.set(video, sample); globalThis.qaFrameMetadata.push(sample);
+              if (globalThis.qaFrameMetadata.length > 3000) globalThis.qaFrameMetadata.shift();
+              observer.handle = video.isConnected ? video.requestVideoFrameCallback(frame) : null;
+            };
+            observer.handle = video.requestVideoFrameCallback(frame);
+          };
           for (const type of ['loadedmetadata', 'playing', 'pause', 'seeking', 'seeked', 'waiting', 'ended', 'error', 'emptied', 'ratechange', 'timeupdate']) {
             document.addEventListener(type, ({ target }) => {
               if (!(target instanceof HTMLVideoElement)) return;
-              if (!target.dataset.qaVideo) {
-                target.dataset.qaVideo = String(++nextId);
-                if (target.requestVideoFrameCallback) {
-                  globalThis.qaFrames.set(target, 0);
-                  const frame = (at, metadata) => {
-                    globalThis.qaFrames.set(target, globalThis.qaFrames.get(target) + 1);
-                    const sample = { id: target.dataset.qaVideo, at, mediaTime: metadata.mediaTime,
-                      presentedFrames: metadata.presentedFrames, expectedDisplayTime: metadata.expectedDisplayTime,
-                      currentTime: target.currentTime, paused: target.paused };
-                    globalThis.qaLastFrame.set(target, sample); globalThis.qaFrameMetadata.push(sample);
-                    if (globalThis.qaFrameMetadata.length > 3000) globalThis.qaFrameMetadata.shift();
-                    if (target.isConnected) target.requestVideoFrameCallback(frame); };
-                  target.requestVideoFrameCallback(frame);
-                }
+              target.dataset.qaVideo ||= String(++nextId);
+              if (type === 'emptied') {
+                stopFrames(target); globalThis.qaLastFrame.delete(target);
+                if (target.requestVideoFrameCallback) globalThis.qaFrames.set(target, 0);
               }
+              // Native load() can invalidate a callback queued before metadata. Re-arm for each real source load.
+              if (type === 'loadedmetadata') startFrames(target);
               globalThis.qaEvents.push({ type, id: target.dataset.qaVideo, at: performance.now(), time: target.currentTime,
                 paused: target.paused, ready: target.readyState, rate: target.playbackRate });
               if (globalThis.qaEvents.length > 3000) globalThis.qaEvents.shift();
@@ -436,13 +456,23 @@ async function main() {
         await capture(page, 'native-first-automatic-skip');
 
         await openRoute('middle'); await playing(page); await pause(page);
-        const target = await seek(page, 75); await settledAt(page, target);
+        const target = await seek(page, 75);
         await eventually(() => result.httpRequests.some(({ missing, status }) => missing === 'middle' && status === 404), 'Native middle gap really returns HTTP 404');
-        await delay(500);
+        result.observations.middleRequestedTime = target;
+        result.observations.middlePausedSamples = [];
+        for (let sample = 0; sample < 6; sample += 1) {
+          result.observations.middlePausedSamples.push(await media(page));
+          if (sample < 5) await delay(200);
+        }
         result.observations.middlePaused = await media(page);
-        result.observations.middlePaused.stalePresentedFrame = Math.abs((result.observations.middlePaused.presentedFrame?.mediaTime ?? -Infinity) - target) > 0.6;
+        result.observations.middlePaused.stalePresentedFrame = result.observations.middlePaused.presentedFrame
+          ? Math.abs(result.observations.middlePaused.presentedFrame.mediaTime - target) > 0.6 : null;
         await capture(page, 'native-middle-paused-observation');
-        await button(page, 'Play').click(); await delay(2000);
+        await button(page, 'Play').click();
+        result.observations.middleResumedSamples = [];
+        for (let sample = 0; sample < 10; sample += 1) {
+          await delay(200); result.observations.middleResumedSamples.push(await media(page));
+        }
         result.observations.middleResumed = await media(page);
         await capture(page, 'native-middle-resumed-observation'); await pause(page);
 

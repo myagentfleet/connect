@@ -22,18 +22,26 @@ jobs:
             os: ubuntu-latest
             engine: firefox
             native: 'false'
-            cases: controls-and-decoded-playback
+            cases: ''
+            diagnostic: 'false'
+          - profile: webkit-macos
+            os: macos-15
+            engine: webkit
+            native: 'false'
+            cases: ''
+            diagnostic: 'false'
           - profile: webkit-macos-iphone-emulation
             os: macos-15
             engine: webkit
             native: 'true'
-            cases: native-gap-observations,native-manifest-error-and-repaired-retry
+            cases: controls-and-decoded-playback,healthy-loop,loading-and-navigation-cancellation,native-gap-observations,native-manifest-error-and-repaired-retry
+            diagnostic: 'true'
     env:
-      FINAL_CANDIDATE_SHA: 8eaa650615151569cb00eba21c79e167e969d9e6
+      FINAL_CANDIDATE_SHA: ff8654bd8faf4e9b4de121bb1b188a7be7e1e745
       QA769_ENGINE: ${{ matrix.engine }}
       QA769_NATIVE_PROFILE: ${{ matrix.native }}
       QA769_CASE: ${{ matrix.cases }}
-      QA769_DIAGNOSTIC_ONLY: 'true'
+      QA769_DIAGNOSTIC_ONLY: ${{ matrix.diagnostic }}
       QA769_OUTPUT: ${{ github.workspace }}/results/${{ matrix.profile }}
       QA769_FIXTURES: ${{ github.workspace }}/application/public/demo-video
       VITE_POSTHOG_KEY: ''
