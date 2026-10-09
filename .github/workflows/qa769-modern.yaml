@@ -1,5 +1,5 @@
 # Validation only: publish separately from the fix PR.
-name: qa769-modern-stall
+name: qa769-modern-cleanup
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      FINAL_CANDIDATE_SHA: 78a13db35e4c7f9aa1e90e03bcf3dc1793c051b9
+      FINAL_CANDIDATE_SHA: 8276cd68b3ac31da150fc8b4566fb29e479e2f65
       QA769_HEADLESS: 'false'
       QA769_REVISION_LABEL: candidate
       QA769_CAPTURE_ONLY: 'false'
