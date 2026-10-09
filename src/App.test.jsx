@@ -337,6 +337,7 @@ describe('whole-app behavior', () => {
     [`/${FIRST}/${LOG}?dialog=settings&device=${SECOND}`, 'Device name'],
   ])('device settings opens from a cold URL %s', async (url, label) => {
     const { history, store } = await renderApp(url);
+    expect(await screen.findByRole('dialog', { name: 'Device settings' })).toBeVisible();
     const input = await screen.findByLabelText(label);
     expect(input).toHaveValue(url.includes(`device=${SECOND}`) ? 'Alpha' : 'Zulu');
     expect(store.getState().dongleId).toBe(FIRST);
@@ -377,6 +378,36 @@ describe('whole-app behavior', () => {
     expect(history.location.search).toBe(new URL(url, 'https://connect.comma.ai').search);
   });
 
+  test('filter drafts survive same-device navigation but reset to the next device’s saved filter', async () => {
+    const { history, store } = await renderApp(`/${SECOND}?dialog=filter`);
+    const dates = () => [screen.getByLabelText('Start date:'), screen.getByLabelText('End date:')];
+    const changeDates = (start, end) => {
+      fireEvent.change(dates()[0], { target: { value: start } });
+      fireEvent.change(dates()[1], { target: { value: end } });
+    };
+    expect(await screen.findByRole('dialog', { name: 'Filter' })).toBeVisible();
+    changeDates('2026-08-01', '2026-08-02');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(history.location.search).toBe(''));
+    const secondFilter = store.getState().filter;
+
+    act(() => history.push(`/${FIRST}?dialog=filter`));
+    expect(await screen.findByText('Start date:')).toBeVisible();
+    const firstFilter = store.getState().filter;
+    changeDates('2026-08-03', '2026-08-04');
+    act(() => history.push(`/${FIRST}?dialog=filter&x=1`));
+    expect(dates()[0]).toHaveValue('2026-08-03');
+    expect(dates()[1]).toHaveValue('2026-08-04');
+
+    act(() => history.push(`/${SECOND}?dialog=filter&x=1`));
+    expect(dates()[0]).toHaveValue('2026-08-01');
+    expect(dates()[1]).toHaveValue('2026-08-02');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(history.location.search).toBe('?x=1'));
+    expect(store.getState().filter).toEqual(secondFilter);
+    expect(store.getState().deviceCache[FIRST].filter).toEqual(firstFilter);
+  });
+
   test('settings for an unselected device opens that same device upload queue', async () => {
     const { history, store } = await renderApp(`/referrals?dialog=settings&device=${SECOND}`);
     expect(await screen.findByLabelText('Device name')).toHaveValue('Alpha');
@@ -409,7 +440,7 @@ describe('whole-app behavior', () => {
 
   test('a cold nested upload queue closes to its target device settings', async () => {
     const { history, store } = await renderApp(`/${FIRST}/${LOG}/0/20?dialog=uploads&device=${SECOND}&parent=settings`);
-    expect(await screen.findByText('Upload queue')).toBeVisible();
+    expect(await screen.findByRole('dialog', { name: 'Upload queue' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(await screen.findByLabelText('Device name')).toHaveValue('Alpha');
     expect(history.location.pathname).toBe(`/${FIRST}/${LOG}/0/20`);
@@ -419,6 +450,7 @@ describe('whole-app behavior', () => {
 
   test('a cold unpair URL opens the target confirmation without unpairing', async () => {
     const { history, store } = await renderApp(`/${FIRST}/${LOG}?dialog=unpair&device=${SECOND}`);
+    expect(await screen.findByRole('dialog', { name: 'Unpair device' })).toBeVisible();
     const title = await screen.findByRole('heading', { name: 'Unpair device' });
     expect(title).toBeVisible();
     expect(within(title.parentElement).getByText(SECOND)).toBeVisible();

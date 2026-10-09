@@ -582,14 +582,14 @@ export class PrimeManage extends Component {
           </div>
         </div>
         <Modal
-          open={dialog === 'change-plan'}
+          open={Boolean(hasPrimeSub && dialog === 'change-plan')}
           onClose={this.closePlanDialog}
         >
-          <Paper className="absolute left-1/2 top-[40%] w-[400px] max-w-[90%] -translate-x-1/2 -translate-y-1/2 p-4">
+          <Paper role="dialog" aria-modal="true" aria-labelledby="prime-change-plan-title" className="absolute left-1/2 top-[40%] w-[400px] max-w-[90%] -translate-x-1/2 -translate-y-1/2 p-4">
             {this.state.planSwitchStatus === 'success'
               ? (
                 <>
-                  <Typography variant="title" className="text-white">
+                  <Typography id="prime-change-plan-title" variant="title" className="text-white">
                     {`Welcome to ${primePlanName(planSwitchTarget)}`}
                   </Typography>
                   <div className="mt-4 rounded-lg bg-green-500/20 p-3 text-green-100">
@@ -613,7 +613,7 @@ export class PrimeManage extends Component {
               )
               : (
                 <>
-                  <Typography variant="title" className="text-white">
+                  <Typography id="prime-change-plan-title" variant="title" className="text-white">
                     {`Switch to ${primePlanName(planSwitchTarget)} plan`}
                   </Typography>
                   <Typography className="mt-3 text-white/80">
@@ -663,11 +663,11 @@ export class PrimeManage extends Component {
           </Paper>
         </Modal>
         <Modal
-          open={dialog === 'cancel-prime'}
+          open={Boolean(hasPrimeSub && dialog === 'cancel-prime')}
           onClose={() => dispatch(closeDialog())}
         >
-          <Paper className={classes.modal}>
-            <Typography variant="title">Cancel prime subscription</Typography>
+          <Paper role="dialog" aria-modal="true" aria-labelledby="prime-cancel-title" className={classes.modal}>
+            <Typography id="prime-cancel-title" variant="title">Cancel prime subscription</Typography>
             {this.state.cancelError && (
               <div className={classes.cancelError}>
                 <Typography>{this.state.cancelError}</Typography>

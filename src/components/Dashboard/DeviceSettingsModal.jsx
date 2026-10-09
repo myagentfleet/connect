@@ -263,6 +263,7 @@ class DeviceSettingsModal extends Component {
     return (
       <>
         <Modal
+          role="dialog"
           aria-labelledby="device-settings-modal"
           aria-describedby="device-settings-modal-description"
           open={this.props.isOpen}
@@ -270,10 +271,10 @@ class DeviceSettingsModal extends Component {
         >
           <Paper className={classes.modal}>
             <div className={ classes.titleContainer }>
-              <Typography variant="title">
+              <Typography id="device-settings-modal" variant="title">
                 Device settings
               </Typography>
-              <Typography variant="caption">
+              <Typography id="device-settings-modal-description" variant="caption">
                 { device.dongle_id }
               </Typography>
             </div>
@@ -355,17 +356,18 @@ class DeviceSettingsModal extends Component {
           </Paper>
         </Modal>
         <Modal
-          aria-labelledby="device-settings-modal"
-          aria-describedby="device-settings-modal-description"
+          role="dialog"
+          aria-labelledby="unpair-device-modal"
+          aria-describedby="unpair-device-modal-description"
           open={this.props.dialog === 'unpair'}
           onClose={ this.closeUnpair }
         >
           <Paper className={ `${classes.modal} ${classes.modalUnpair}` }>
             <div className={ classes.titleContainer }>
-              <Typography variant="title">
+              <Typography id="unpair-device-modal" variant="title">
                 Unpair device
               </Typography>
-              <Typography variant="caption">
+              <Typography id="unpair-device-modal-description" variant="caption">
                 { device.dongle_id }
               </Typography>
             </div>

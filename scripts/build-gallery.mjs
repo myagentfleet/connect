@@ -139,6 +139,25 @@ const GALLERY_STATES = [
     readySelector: '[role="dialog"] button:last-child:not([disabled])',
     modalText: 'Delete clip?',
   },
+  {
+    name: 'cancel-prime-unavailable-url',
+    label: 'Cancel prime without a subscription (direct link)',
+    page: 'checkout',
+    path: `/${DONGLE_ID}/prime?dialog=cancel-prime`,
+    newUrlState: true,
+    readyText: 'This device does not have a prime subscription to manage.',
+    modalText: 'This device does not have a prime subscription to manage.',
+  },
+  {
+    name: 'change-plan-unavailable-url',
+    label: 'Change plan without subscription details (direct link)',
+    page: 'management',
+    path: `/${DONGLE_ID}/prime?dialog=change-plan`,
+    missingSubscription: true,
+    newUrlState: true,
+    readyText: 'Subscription details are not available yet. Please try again later.',
+    modalText: 'Subscription details are not available yet. Please try again later.',
+  },
 ];
 
 const GALLERY_VIEWPORTS = [
@@ -431,7 +450,9 @@ async function mockGalleryRequest(request, origin, pageName, fixtures, state) {
   }
   if (url.hostname === 'billing.comma.ai') {
     if (path === '/v1/prime/subscribe_info') return jsonResponse(request, data.subscribeInfo);
-    if (path === '/v1/prime/subscription') return jsonResponse(request, data.subscription);
+    if (path === '/v1/prime/subscription') {
+      return jsonResponse(request, state.missingSubscription ? null : data.subscription);
+    }
   }
   if (url.hostname === 'athena.comma.ai' && path === `/${DONGLE_ID}`) {
     const payload = JSON.parse(request.postData() || '{}');

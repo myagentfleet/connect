@@ -1,6 +1,6 @@
 import React, { Component } from 'react';
 import {
-  Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, LinearProgress, Menu, Typography, withStyles,
+  Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, LinearProgress, Popover, Typography, withStyles,
 } from '@material-ui/core';
 
 import Colors from '../../colors';
@@ -31,17 +31,22 @@ const SPEEDUPS = [1, 2, 4, 5, 10];
 const styles = () => ({
   paper: {
     display: 'flex',
+    maxHeight: 'calc(100vh - 96px)',
     maxWidth: 'calc(100vw - 24px)',
     outline: 'none',
     overflow: 'hidden',
     width: 360,
   },
   menuList: {
+    boxSizing: 'border-box',
     display: 'flex',
     flexDirection: 'column',
     maxHeight: 'calc(100vh - 96px)',
     minHeight: 0,
+    overflowY: 'auto',
+    padding: '8px 0',
     width: '100%',
+    WebkitOverflowScrolling: 'touch',
   },
   createPaper: {
     '@media (max-width: 600px)': {
@@ -63,7 +68,7 @@ const styles = () => ({
       maxHeight: 'none',
     },
   },
-  body: { outline: 'none', padding: 16, '&:focus': { outline: 'none' } },
+  body: { flexShrink: 0, outline: 'none', padding: 16, '&:focus': { outline: 'none' } },
   createHeader: {
     alignItems: 'center',
     display: 'flex',
@@ -132,9 +137,8 @@ const styles = () => ({
     '&:disabled': { background: Colors.white05, color: Colors.white60 },
   },
   clipsSection: {
-    flex: '1 1 auto',
+    flex: '0 0 auto',
     minHeight: 0,
-    overflowY: 'auto',
     padding: '13px 16px 16px',
   },
   sectionHeader: { alignItems: 'center', color: Colors.white60, display: 'flex', marginBottom: 8 },
@@ -239,6 +243,8 @@ class ClipMenu extends Component {
     this.mounted = false;
     this.previewRequest = 0;
     this.previewKey = null;
+    this.inventoryRequest = 0;
+    this.createRequest = 0;
     this.deleteRequest = 0;
   }
 
@@ -252,8 +258,15 @@ class ClipMenu extends Component {
     const routeChanged = this.props.route?.fullname !== prevProps.route?.fullname;
     const deviceChanged = this.props.dongleId !== prevProps.dongleId;
     const reconnected = this.props.deviceOnline && !prevProps.deviceOnline;
+    if (routeChanged || deviceChanged) {
+      this.inventoryRequest += 1;
+      this.stopPolling();
+      this.createRequest += 1;
+      this.setState({ creating: false, autoDownloadFilename: null, error: null });
+    }
     if ((opened || routeChanged || deviceChanged || reconnected) && this.props.open) this.loadClips();
     if (!this.props.deviceOnline && prevProps.deviceOnline) {
+      this.inventoryRequest += 1;
       this.stopPolling();
       this.setState({ loading: false });
     }
@@ -265,11 +278,16 @@ class ClipMenu extends Component {
       if (this.state.deleting) this.setState({ deleting: false });
     }
     this.syncPreview();
+    if (this.props.open && (!this.props.dialog || this.props.dialog === 'clips')) {
+      this.panelActions?.updatePosition();
+    }
   }
 
   componentWillUnmount() {
     this.mounted = false;
+    this.inventoryRequest += 1;
     this.previewRequest += 1;
+    this.createRequest += 1;
     this.deleteRequest += 1;
     this.stopPolling();
     if (this.state.previewUrl) URL.revokeObjectURL(this.state.previewUrl);
@@ -281,8 +299,12 @@ class ClipMenu extends Component {
   }
 
   async loadClips(showLoading = true) {
+    this.inventoryRequest += 1;
+    const request = this.inventoryRequest;
     const routeName = deviceRouteName(this.props.route);
     const { dongleId } = this.props;
+    const isCurrentRequest = () => this.mounted && request === this.inventoryRequest
+      && routeName === deviceRouteName(this.props.route) && dongleId === this.props.dongleId;
     if (!this.props.deviceOnline) {
       this.setState({ clips: [], clipsDongleId: dongleId, cameraRanges: null, loading: false, error: null });
       return;
@@ -290,19 +312,25 @@ class ClipMenu extends Component {
     if (showLoading) this.setState({ loading: true, error: null });
     try {
       const state = await clipDevice.getClipState(dongleId, routeName ? { route: this.props.route.fullname } : {});
-      if (!this.mounted || routeName !== deviceRouteName(this.props.route) || dongleId !== this.props.dongleId) return;
+      if (!isCurrentRequest()) return;
       const { clips } = state;
       const downloadedClips = new Set((await Promise.all(clips
         .filter(clip => clip.status === 'ready')
         .map(async clip => ([clip.filename, await clipDevice.hasClipBlob(dongleId, clip.filename, clip.requested_at)]))))
         .filter(([, downloaded]) => downloaded)
         .map(([filename]) => filename));
-      if (!this.mounted || routeName !== deviceRouteName(this.props.route) || dongleId !== this.props.dongleId) return;
+      if (!isCurrentRequest()) return;
       const cameraRanges = routeName ? state.cameras || {} : null;
       this.setState({ clips, clipsDongleId: dongleId, downloadedClips, cameraRanges, loading: false }, () => {
+        if (!isCurrentRequest()) return;
         const autoClip = clips.find(clip => clip.filename === this.state.autoDownloadFilename && clip.status === 'ready');
-        if (this.props.open && this.props.dialog === 'clips' && autoClip) {
-          this.setState({ autoDownloadFilename: null }, () => this.openViewer(autoClip));
+        if (this.props.open && this.props.dialog === 'clips' && !this.state.creating && autoClip) {
+          const creation = this.createRequest;
+          this.setState({ autoDownloadFilename: null }, () => {
+            if (isCurrentRequest() && creation === this.createRequest && this.props.open && this.props.dialog === 'clips') {
+              this.openViewer(autoClip);
+            }
+          });
         }
       });
       this.stopPolling();
@@ -310,7 +338,7 @@ class ClipMenu extends Component {
         this.poll = setTimeout(() => this.loadClips(false), POLL_INTERVAL);
       }
     } catch (err) {
-      if (this.mounted && dongleId === this.props.dongleId && routeName === deviceRouteName(this.props.route)) {
+      if (isCurrentRequest()) {
         this.setState({ loading: false, error: err.message || 'Could not reach the device' });
       }
     }
@@ -319,7 +347,9 @@ class ClipMenu extends Component {
   async createClip() {
     const { dongleId, route, zoom } = this.props;
     const { camera, bitrate, speedup, filename } = this.state;
-    if (!route || !zoom || !this.props.deviceOnline || !validFilename(filename)) return;
+    if (!route || !zoom || !this.props.deviceOnline || this.state.creating || !validFilename(filename)) return;
+    this.createRequest += 1;
+    const request = this.createRequest;
     const generatedFilename = defaultFilename(dongleId, route, camera, zoom.start / 1000, zoom.end / 1000, speedup);
     const outputFilename = `${normalizeFilename(filename) || generatedFilename}.mp4`;
     this.setState({ creating: true, autoDownloadFilename: outputFilename, error: null });
@@ -335,11 +365,13 @@ class ClipMenu extends Component {
           filename: outputFilename,
         },
       });
-      if (!this.mounted) return;
+      if (!this.mounted || request !== this.createRequest) return;
       this.setState({ creating: false });
       await this.loadClips(false);
     } catch (err) {
-      if (this.mounted) this.setState({ creating: false, autoDownloadFilename: null, error: err.message || 'Could not create clip' });
+      if (this.mounted && request === this.createRequest) {
+        this.setState({ creating: false, autoDownloadFilename: null, error: err.message || 'Could not create clip' });
+      }
     }
   }
 
@@ -457,10 +489,10 @@ class ClipMenu extends Component {
       ? formatDuration((viewingClip.source_end_time - viewingClip.source_start_time) / (viewingClip.speedup || 1))
       : '';
     return (
-      <Dialog open={open && dialog === 'clip'} onClose={onClose} classes={{ paper: classes.viewerPaper }} maxWidth="md">
+      <Dialog open={open && dialog === 'clip'} onClose={onClose} aria-labelledby="clip-viewer-title" classes={{ paper: classes.viewerPaper }} maxWidth="md">
         <DialogTitle disableTypography className={classes.viewerTitle}>
           <div className={classes.viewerDetails}>
-            <Typography className={`${classes.header} ${classes.viewerHeader}`}>{title}</Typography>
+            <Typography id="clip-viewer-title" className={`${classes.header} ${classes.viewerHeader}`}>{title}</Typography>
             <Typography className={classes.viewerMeta}>
               {[camera, duration, formatSize(viewingClip?.size)].filter(Boolean).join(' · ')}
             </Typography>
@@ -499,9 +531,10 @@ class ClipMenu extends Component {
       <Dialog
         open={open && dialog === 'delete-clip'}
         onClose={() => !deleting && onClose()}
+        aria-labelledby="clip-delete-title"
         classes={{ paper: classes.deletePaper }}
       >
-        <DialogTitle className={classes.deleteTitle}>Delete clip?</DialogTitle>
+        <DialogTitle id="clip-delete-title" className={classes.deleteTitle}>Delete clip?</DialogTitle>
         <DialogContent>
           <Typography className={classes.deleteContent}>
             {`${title} will be permanently deleted from your comma device.`}
@@ -602,96 +635,101 @@ class ClipMenu extends Component {
 
     return (
       <>
-        <Menu
+        <Popover
           open={open && (!dialog || dialog === 'clips')}
           anchorEl={anchorEl}
           onClose={onClose}
+          action={(actions) => { this.panelActions = actions; }}
           anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
           transformOrigin={{ vertical: 'top', horizontal: 'right' }}
           classes={{ paper: `${classes.paper} ${!inventoryOnly ? classes.createPaper : ''}` }}
-          MenuListProps={{ className: `${classes.menuList} ${!inventoryOnly ? classes.createMenuList : ''}`, style: { outline: 'none' } }}
-          disableAutoFocusItem
+          role="dialog"
+          PaperProps={{ 'aria-labelledby': inventoryOnly ? 'clip-inventory-title' : 'clip-create-title' }}
         >
-          {!inventoryOnly && <div className={classes.body}>
-          <div className={classes.createHeader}>
-            <Typography className={classes.header}>Create a clip</Typography>
-            <IconButton aria-label="Close clip menu" className={classes.mobileClose} onClick={onClose}><CloseBold /></IconButton>
-          </div>
-          <div className={classes.range}>
-            <Typography className={classes.supporting}>Selected timeline range</Typography>
-            <Typography className={classes.rangeValue}>{zoom ? `${formatTime(startTime)}–${formatTime(endTime)} · ${formatDuration(duration)}` : '—'}</Typography>
-          </div>
-          <div className={classes.field}>
-            <Typography className={classes.label}>CAMERA</Typography>
-            <div className={classes.segmentedControl}>
-              {CAMERAS.map(([value, label]) => (
-                <Button
-                  key={value}
-                  aria-pressed={camera === value}
-                  className={classes.segmentedButton}
-                  disabled={cameraRanges !== null && !cameraCoversRange(cameraRanges, value, startTime, endTime)}
-                  onClick={() => this.setState({ camera: value })}
-                >
-                  {label}
+          <div className={`${classes.menuList} ${!inventoryOnly ? classes.createMenuList : ''}`}>
+            {!inventoryOnly && (
+              <div className={classes.body}>
+                <div className={classes.createHeader}>
+                  <Typography id="clip-create-title" className={classes.header}>Create a clip</Typography>
+                  <IconButton aria-label="Close clip menu" className={classes.mobileClose} onClick={onClose}><CloseBold /></IconButton>
+                </div>
+                <div className={classes.range}>
+                  <Typography className={classes.supporting}>Selected timeline range</Typography>
+                  <Typography className={classes.rangeValue}>{zoom ? `${formatTime(startTime)}–${formatTime(endTime)} · ${formatDuration(duration)}` : '—'}</Typography>
+                </div>
+                <div className={classes.field}>
+                  <Typography className={classes.label}>CAMERA</Typography>
+                  <div className={classes.segmentedControl}>
+                    {CAMERAS.map(([value, label]) => (
+                      <Button
+                        key={value}
+                        aria-pressed={camera === value}
+                        className={classes.segmentedButton}
+                        disabled={cameraRanges !== null && !cameraCoversRange(cameraRanges, value, startTime, endTime)}
+                        onClick={() => this.setState({ camera: value })}
+                      >
+                        {label}
+                      </Button>
+                    ))}
+                  </div>
+                  {!cameraAvailable && (
+                    <Typography className={classes.availabilityHint}>
+                      No camera footage covers this entire range. Choose a smaller range.
+                    </Typography>
+                  )}
+                </div>
+                <div className={classes.field}>
+                  <Typography className={classes.label}>QUALITY</Typography>
+                  <div className={classes.segmentedControl}>
+                    {BITRATES.map(([value, label, detail]) => (
+                      <Button key={value} aria-pressed={bitrate === value} className={classes.segmentedButton} onClick={() => this.setState({ bitrate: value })}>
+                        <span>{label}<span className={classes.qualityDetail}>{detail}</span></span>
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className={classes.field}>
+                  <Typography className={classes.label}>SPEED</Typography>
+                  <div className={classes.segmentedControl}>
+                    {SPEEDUPS.map(value => (
+                      <Button key={value} aria-pressed={speedup === value} className={classes.segmentedButton} onClick={() => this.setState({ speedup: value })}>{`${value}×`}</Button>
+                    ))}
+                  </div>
+                  <div className={classes.estimate}>
+                    <Typography className={classes.supporting}>{`Output: ${formatDuration(outputDuration)}`}</Typography>
+                    <Typography className={classes.estimateValue}>{`About ${formatSize(estimatedSize)}`}</Typography>
+                  </div>
+                </div>
+                <div className={classes.field}>
+                  <Typography className={classes.label}>FILENAME</Typography>
+                  <input
+                    className={classes.input}
+                    value={filename}
+                    maxLength={80}
+                    placeholder={defaultFilename(this.props.dongleId, route, camera, startTime, endTime, speedup)}
+                    onChange={event => this.setState({ filename: event.target.value })}
+                  />
+                  {invalidFilename && <Typography className={classes.error}>Use letters, numbers, periods, underscores, and hyphens only.</Typography>}
+                </div>
+                {duration > MAX_CLIP_DURATION && <Typography className={classes.error}>Choose a range of 30 minutes or less.</Typography>}
+                <Button className={classes.create} disabled={!deviceOnline || loading || creating || deviceBusy || invalidDuration || invalidFilename || cameraUnavailable || !route} onClick={() => this.createClip()}>
+                  {creating ? <CircularProgress size={18} /> : (!deviceOnline ? 'Device offline' : (deviceBusy ? 'Clip in progress' : 'Create clip'))}
                 </Button>
-              ))}
-            </div>
-            {!cameraAvailable && (
-              <Typography className={classes.availabilityHint}>
-                No camera footage covers this entire range. Choose a smaller range.
-              </Typography>
+              </div>
             )}
-          </div>
-          <div className={classes.field}>
-            <Typography className={classes.label}>QUALITY</Typography>
-            <div className={classes.segmentedControl}>
-              {BITRATES.map(([value, label, detail]) => (
-                <Button key={value} aria-pressed={bitrate === value} className={classes.segmentedButton} onClick={() => this.setState({ bitrate: value })}>
-                  <span>{label}<span className={classes.qualityDetail}>{detail}</span></span>
-                </Button>
-              ))}
+            {!inventoryOnly && <hr />}
+            <div className={classes.clipsSection}>
+              <div className={classes.sectionHeader}>
+                <Typography id="clip-inventory-title" className={classes.sectionTitle}>CLIPS ON THIS DEVICE</Typography>
+                <InfoTooltip title="Clips are stored on your device and may be cleared to make room for more recent driving footage." />
+              </div>
+              {error && <Typography className={classes.error}>{error}</Typography>}
+              {loading && <div className={classes.empty}><CircularProgress size={18} /></div>}
+              {!loading && clips.length === 0 && <Typography className={classes.empty}>{deviceOnline ? 'No clips yet' : 'Device offline'}</Typography>}
+              {!loading && clips.map(clip => this.renderClip(clip))}
             </div>
           </div>
-          <div className={classes.field}>
-            <Typography className={classes.label}>SPEED</Typography>
-            <div className={classes.segmentedControl}>
-              {SPEEDUPS.map(value => (
-                <Button key={value} aria-pressed={speedup === value} className={classes.segmentedButton} onClick={() => this.setState({ speedup: value })}>{`${value}×`}</Button>
-              ))}
-            </div>
-            <div className={classes.estimate}>
-              <Typography className={classes.supporting}>{`Output: ${formatDuration(outputDuration)}`}</Typography>
-              <Typography className={classes.estimateValue}>{`About ${formatSize(estimatedSize)}`}</Typography>
-            </div>
-          </div>
-          <div className={classes.field}>
-            <Typography className={classes.label}>FILENAME</Typography>
-            <input
-              className={classes.input}
-              value={filename}
-              maxLength={80}
-              placeholder={defaultFilename(this.props.dongleId, route, camera, startTime, endTime, speedup)}
-              onChange={event => this.setState({ filename: event.target.value })}
-            />
-            {invalidFilename && <Typography className={classes.error}>Use letters, numbers, periods, underscores, and hyphens only.</Typography>}
-          </div>
-          {duration > MAX_CLIP_DURATION && <Typography className={classes.error}>Choose a range of 30 minutes or less.</Typography>}
-          <Button className={classes.create} disabled={!deviceOnline || loading || creating || deviceBusy || invalidDuration || invalidFilename || cameraUnavailable || !route} onClick={() => this.createClip()}>
-            {creating ? <CircularProgress size={18} /> : (!deviceOnline ? 'Device offline' : (deviceBusy ? 'Clip in progress' : 'Create clip'))}
-          </Button>
-          </div>}
-          {!inventoryOnly && <hr />}
-          <div className={classes.clipsSection}>
-            <div className={classes.sectionHeader}>
-              <Typography className={classes.sectionTitle}>CLIPS ON THIS DEVICE</Typography>
-              <InfoTooltip title="Clips are stored on your device and may be cleared to make room for more recent driving footage." />
-            </div>
-            {error && <Typography className={classes.error}>{error}</Typography>}
-            {loading && <div className={classes.empty}><CircularProgress size={18} /></div>}
-            {!loading && clips.length === 0 && <Typography className={classes.empty}>{deviceOnline ? 'No clips yet' : 'Device offline'}</Typography>}
-            {!loading && clips.map(clip => this.renderClip(clip))}
-          </div>
-        </Menu>
+        </Popover>
       </>
     );
   }

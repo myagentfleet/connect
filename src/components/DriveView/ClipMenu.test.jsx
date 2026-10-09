@@ -75,7 +75,7 @@ test('a cold viewer URL shows inventory and preview loading before playback, the
   clipDevice.getClipState.mockReturnValueOnce(inventory.promise);
   clipDevice.getClipUrl.mockReturnValueOnce(preview.promise);
   const { history } = renderClips(`/${FIRST}?dialog=clip&clip=first.mp4`);
-  expect(screen.getByRole('dialog')).toBeVisible();
+  expect(screen.getByRole('dialog', { name: 'first' })).toBeVisible();
   expect(await screen.findByLabelText('Loading clips')).toBeVisible();
   await act(async () => inventory.resolve({ clips }));
   expect(await screen.findByText('Downloading · 0%')).toBeVisible();
@@ -132,6 +132,52 @@ test('viewer Close, Escape, Back and Forward preserve the clip creation form and
   ))).toBe(true);
 });
 
+test.each([
+  [`/${FIRST}?dialog=clips`, 'CLIPS ON THIS DEVICE'],
+  [`/${FIRST}/${LOG}?dialog=clips`, 'Create a clip'],
+])('the named clips panel keeps keyboard navigation native at %s', async (url, title) => {
+  const { history } = renderClips(url);
+  expect(await screen.findByRole('dialog', { name: title })).toBeVisible();
+  const control = screen.queryByRole('textbox') || (await screen.findAllByRole('button', { name: 'Download clip' }))[0];
+  control.focus();
+  // fireEvent does not move focus like a browser's Tab key, but it does expose
+  // the Menu regression: preventing the default and dismissing the panel.
+  expect(fireEvent.keyDown(control, { key: 'Tab', keyCode: 9 })).toBe(true);
+  expect(fireEvent.keyDown(control, { key: 'Tab', keyCode: 9, shiftKey: true })).toBe(true);
+  expect(fireEvent.keyDown(control, { key: 'ArrowDown', keyCode: 40 })).toBe(true);
+  expect(history.location.search).toBe('?dialog=clips');
+  expect(screen.getByRole('dialog', { name: title })).toBeVisible();
+  fireEvent.keyDown(control, { key: 'Escape', keyCode: 27 });
+  expect(history.location.search).toBe('');
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: title })).not.toBeInTheDocument());
+});
+
+test('inventory growth repositions the open panel within the viewport', async () => {
+  const inventory = deferred();
+  clipDevice.getClipState.mockReturnValueOnce(inventory.promise);
+  const anchorEl = document.createElement('button');
+  document.body.appendChild(anchorEl);
+  anchorEl.getBoundingClientRect = () => ({ top: window.innerHeight - 150, left: 500, height: 20, width: 20 });
+  const { unmount } = renderClips(`/${FIRST}?dialog=clips`, { anchorEl });
+  try {
+    const panel = screen.getByRole('dialog', { name: 'CLIPS ON THIS DEVICE' });
+    // jsdom has no layout; expose the dimensions before and after inventory
+    // growth so the installed Popover's positioning calculation runs normally.
+    let height = 100;
+    Object.defineProperty(panel, 'clientHeight', { get: () => height });
+    Object.defineProperty(panel, 'clientWidth', { value: 360 });
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => expect(panel.style.top).toBe(`${window.innerHeight - 150}px`));
+
+    height = 400;
+    await act(async () => inventory.resolve({ clips }));
+    await waitFor(() => expect(panel.style.top).toBe(`${window.innerHeight - 16 - height}px`));
+  } finally {
+    unmount();
+    anchorEl.remove();
+  }
+});
+
 test.each(['clip', 'device', 'close', 'unmount'])('discards a late preview after %s changes', async (change) => {
   const preview = deferred();
   clipDevice.getClipUrl.mockReturnValueOnce(preview.promise);
@@ -153,6 +199,7 @@ test.each(['clip', 'device', 'close', 'unmount'])('discards a late preview after
 test('a cold deletion URL requires confirmation and closes to clips after deletion', async () => {
   const { history } = renderClips(`/${FIRST}?dialog=delete-clip&clip=first.mp4`);
   expect(await screen.findByRole('heading', { name: 'Delete clip?' })).toBeVisible();
+  expect(screen.getByRole('dialog', { name: 'Delete clip?' })).toBeVisible();
   await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled());
   expect(clipDevice.deleteClip).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
@@ -209,4 +256,109 @@ test.each(['success', 'failure'])('a stale deletion %s cannot close or change a 
   expect(history.location.search).toBe('?dialog=delete-clip&clip=second.mp4');
   expect(screen.getByRole('heading', { name: 'Delete clip?' })).toBeVisible();
   expect(screen.queryByText('Old deletion failed')).not.toBeInTheDocument();
+});
+
+test.each([
+  ['inventory', 'success'],
+  ['blob lookup', 'success'],
+  ['inventory', 'failure'],
+])('a stale %s %s cannot replace the newest inventory after A to B to A', async (stage, result) => {
+  const previous = deferred();
+  const oldClip = { ...clips[0], filename: 'old.mp4' };
+  const newestClip = { ...clips[0], filename: 'newest.mp4' };
+  if (stage === 'blob lookup') {
+    clipDevice.getClipState.mockResolvedValueOnce({ clips: [oldClip] });
+    clipDevice.hasClipBlob.mockReturnValueOnce(previous.promise);
+  } else {
+    clipDevice.getClipState.mockReturnValueOnce(previous.promise);
+  }
+  const { history } = renderClips(`/${FIRST}/${LOG}?dialog=clips`);
+  await waitFor(() => expect(clipDevice.getClipState).toHaveBeenCalledOnce());
+  const blobLookups = stage === 'blob lookup' ? 1 : 0;
+  await waitFor(() => expect(clipDevice.hasClipBlob).toHaveBeenCalledTimes(blobLookups));
+
+  clipDevice.getClipState.mockResolvedValue({ clips: [newestClip] });
+  act(() => history.push(`/${FIRST}/2026-08-06--13-00-00?dialog=clips`));
+  expect(await screen.findByText('newest')).toBeVisible();
+  act(() => history.goBack());
+  await waitFor(() => expect(clipDevice.getClipState).toHaveBeenCalledTimes(3));
+  expect(await screen.findByText('newest')).toBeVisible();
+
+  await act(async () => {
+    if (result === 'failure') previous.reject(new Error('Old inventory failed'));
+    else previous.resolve(stage === 'blob lookup' ? false : { clips: [oldClip] });
+  });
+  expect(screen.getByText('newest')).toBeVisible();
+  expect(screen.queryByText('old')).not.toBeInTheDocument();
+  expect(screen.queryByText('Old inventory failed')).not.toBeInTheDocument();
+  expect(history.location.search).toBe('?dialog=clips');
+});
+
+test.each([
+  ['route', FIRST, '2026-08-06--13-00-00', 'success'],
+  ['route', FIRST, '2026-08-06--13-00-00', 'failure'],
+  ['device', SECOND, LOG, 'success'],
+  ['device', SECOND, LOG, 'failure'],
+])('a stale creation after a %s change to %s/%s cannot apply its %s to the new form', async (_change, dongleId, logId, result) => {
+  const previous = deferred();
+  const current = deferred();
+  const cameras = { 'fcamera.hevc': { available_ranges: [[0, 20]] } };
+  clipDevice.getClipState.mockResolvedValue({ clips: [], cameras });
+  clipDevice.createClip.mockReturnValueOnce(previous.promise).mockReturnValueOnce(current.promise);
+  const { history } = renderClips(`/${FIRST}/${LOG}?dialog=clips`);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Create clip' })).toBeEnabled());
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'first' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create clip' }));
+
+  // The new inventory deliberately contains the old requested filename.
+  // A retained auto-download target must not open that unrelated clip.
+  clipDevice.getClipState.mockResolvedValue({ clips, cameras });
+  act(() => history.push(`/${dongleId}/${logId}?dialog=clips`));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Create clip' })).toBeEnabled());
+  expect(history.location.search).toBe('?dialog=clips');
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'second' } });
+  const createButton = screen.getByRole('button', { name: 'Create clip' });
+  fireEvent.click(createButton);
+  expect(clipDevice.createClip).toHaveBeenLastCalledWith(dongleId, expect.objectContaining({ route: `${dongleId}|${logId}` }));
+
+  await act(async () => {
+    if (result === 'success') previous.resolve({});
+    else previous.reject(new Error('Previous creation failed'));
+  });
+  expect(createButton).toBeDisabled();
+  expect(screen.queryByText('Previous creation failed')).not.toBeInTheDocument();
+  expect(clipDevice.getClipState).toHaveBeenCalledTimes(2);
+  expect(history.location.search).toBe('?dialog=clips');
+
+  await act(async () => current.reject(new Error('Current creation failed')));
+  expect(await screen.findByText('Current creation failed')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Create clip' })).toBeEnabled();
+});
+
+test('dialog-only Back and Forward retain pending clip creation and its automatic preview', async () => {
+  const creation = deferred();
+  const cameras = { 'fcamera.hevc': { available_ranges: [[0, 20]] } };
+  clipDevice.getClipState.mockResolvedValue({ clips: [], cameras });
+  clipDevice.createClip.mockReturnValueOnce(creation.promise);
+  const pathname = `/${FIRST}/${LOG}`;
+  const { history } = renderClips(pathname);
+  act(() => history.push(`${pathname}?dialog=clips`));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Create clip' })).toBeEnabled());
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'first' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create clip' }));
+  // An older ready clip with the requested filename must not be previewed while
+  // the new creation is still awaiting acceptance by the device.
+  clipDevice.getClipState.mockResolvedValue({ clips, cameras });
+  act(() => history.goBack());
+  act(() => history.goForward());
+  expect(await screen.findAllByRole('button', { name: 'Download clip' })).toHaveLength(2);
+  expect(history.location.search).toBe('?dialog=clips');
+  expect(await screen.findByRole('textbox')).toHaveValue('first');
+  expect(screen.queryByRole('button', { name: 'Create clip' })).not.toBeInTheDocument();
+  expect(clipDevice.createClip).toHaveBeenCalledOnce();
+
+  await act(async () => creation.resolve({}));
+  await waitFor(() => expect(history.location.search).toBe('?dialog=clip&clip=first.mp4'));
+  expect(await screen.findByRole('button', { name: 'Close video' })).toBeVisible();
+  expect(clipDevice.createClip).toHaveBeenCalledOnce();
 });

@@ -51,7 +51,7 @@ const AppDialogs = ({ navigation, dongleId, device, devices, profile, dispatch }
     case 'pair':
       return <AddDevice key={navigation.pairToken ? `token:${navigation.pairToken}` : 'camera'} pairToken={navigation.pairToken} onClose={onClose} />;
     case 'filter':
-      return <TimeSelect onClose={onClose} />;
+      return <TimeSelect key={targetId} onClose={onClose} />;
     default:
       return <UploadQueue key={targetId} open={dialog === 'uploads'} update device={targetDevice} onClose={onClose} />;
   }

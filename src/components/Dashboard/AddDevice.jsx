@@ -152,7 +152,13 @@ const styles = (theme) => ({
     fontWeight: 'bold',
   },
   pairStatus: {
-    '& p': { marginTop: 10 },
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing.unit * 2,
+  },
+  pairStatusContent: {
+    flex: 1,
+    minWidth: 0,
   },
   canvas: {
     position: 'absolute',
@@ -448,7 +454,7 @@ class AddDevice extends Component {
     const videoContainerOverlay = (pairLoading || pairDongleId || pairError) ? classes.videoContainerOverlay : '';
     const pairStatus = (
       <>
-        { pairLoading && <CircularProgress size={pairToken ? 32 : '10vw'} style={{ color: '#525E66' }} aria-label="Pairing device" /> }
+        { pairLoading && <CircularProgress size={pairToken ? 32 : '10vw'} style={pairToken ? undefined : { color: '#525E66' }} aria-label="Pairing device" /> }
         { pairError && <Typography>{ pairError }</Typography> }
         { pairDongleId && (
           <Typography>
@@ -460,7 +466,7 @@ class AddDevice extends Component {
     );
 
     return (
-      <Modal aria-labelledby="add-device-modal" open onClose={ this.modalClose }>
+      <Modal role="dialog" aria-labelledby="add-device-modal" open onClose={ this.modalClose }>
         <Paper className={ classes.modal }>
           <div className={ classes.titleContainer }>
             <Typography id="add-device-modal" variant="title">{pairToken ? 'Pairing device' : 'Pair device'}</Typography>
@@ -470,8 +476,8 @@ class AddDevice extends Component {
           { pairToken
             ? (
               <div className={ classes.pairStatus }>
-                {pairStatus}
-                <Button className={ classes.retryButton } onClick={ this.modalClose }>Close</Button>
+                <div className={ classes.pairStatusContent }>{pairStatus}</div>
+                <Button variant="contained" onClick={ this.modalClose }>Close</Button>
               </div>
             )
             : hasCamera === false
