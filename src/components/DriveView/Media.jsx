@@ -203,6 +203,9 @@ const MediaType = {
 };
 
 class Media extends Component {
+  downloadButton = React.createRef();
+  moreInfoButton = React.createRef();
+
   constructor(props) {
     super(props);
 
@@ -612,6 +615,7 @@ class Media extends Component {
             </Tooltip>}
             <button
               type="button"
+              ref={this.downloadButton}
               className={classes.mediaOption}
               aria-haspopup="true"
               aria-expanded={Boolean(downloadMenu)}
@@ -622,6 +626,7 @@ class Media extends Component {
             </button>
             <button
               type="button"
+              ref={this.moreInfoButton}
               className={classes.mediaOption}
               aria-haspopup="true"
               aria-expanded={Boolean(moreInfoMenu)}
@@ -685,6 +690,7 @@ class Media extends Component {
           open={ Boolean(alwaysOpen || downloadMenu) }
           anchorEl={ downloadMenu }
           onClose={ () => this.setState({ downloadMenu: null }) }
+          onExited={() => { if (!this.state.uploadModal) this.downloadButton.current?.focus(); }}
           anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
           transformOrigin={{ vertical: 'top', horizontal: 'right' }}
         >
@@ -782,6 +788,7 @@ class Media extends Component {
           open={ Boolean(alwaysOpen || moreInfoMenu) }
           anchorEl={ moreInfoMenu }
           onClose={ () => this.setState({ moreInfoMenu: null }) }
+          onExited={() => this.moreInfoButton.current?.focus()}
           transformOrigin={{ vertical: 'top', horizontal: windowWidth > 400 ? 260 : 300 }}
         >
           <MenuItem
