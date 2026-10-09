@@ -378,7 +378,8 @@ async function layout(page, state) {
   }
 }
 
-async function mapCapture(page, name) {
+async function mapCapture(page, name, videoState = 'paused') {
+  const videoElement = await page.$(VIDEO);
   const before = await media(page);
   if (page.viewport().width < 1536) {
     await textButton(page, 'Map');
@@ -402,9 +403,17 @@ async function mapCapture(page, name) {
         wrapperContainsMap: wrapper.contains(element),
         wrapperVisibility: getComputedStyle(wrapper).visibility,
         wrapperOverflow: getComputedStyle(wrapper).overflow,
+        videoOverlayCount: video.parentElement.querySelectorAll('[role="status"]').length,
+        videoControlCount: video.parentElement.querySelectorAll('button').length,
+        mapReceivesPointer: wrapper.contains(document.elementFromPoint(
+          element.getBoundingClientRect().x + element.getBoundingClientRect().width / 2,
+          element.getBoundingClientRect().y + element.getBoundingClientRect().height / 2)),
       };
     });
-    report.mapGeometry ||= []; report.mapGeometry.push(geometry);
+    report.mapGeometry ||= []; report.mapGeometry.push({ videoState, ...geometry });
+    assert.equal(geometry.videoOverlayCount, 0, 'Video loading and errors do not cover the selected map');
+    assert.equal(geometry.videoControlCount, 0, 'The selected map has no hidden video controls in the tab order');
+    assert.equal(geometry.mapReceivesPointer, true, 'The visible map receives pointer input at its center');
     assert.ok(geometry.wrapperContainsMap && geometry.wrapperVisibility === 'visible', 'The measured wrapper contains the visible map');
     for (const name of ['canvas', 'map']) {
       assert.ok(geometry[name].height > 0 && Math.abs(geometry[name].height - geometry.wrapper.height) <= 1,
@@ -423,12 +432,19 @@ async function mapCapture(page, name) {
   }
   assert.ok(bluePixels >= 30, 'The route position marker is visible on the real map canvas');
   const after = await media(page);
-  assert.equal(after.id, before.id, 'Map switch preserves the same video element');
+  assert.equal(after.id, before.id, 'Map switch preserves the video identity marker');
+  assert.equal(await videoElement.evaluate((element, selector) => element.isConnected && element === document.querySelector(selector), VIDEO),
+    true, 'Map switch preserves the actual video element even before metadata');
   assert.ok(Math.abs(after.time - before.time) < 0.1, 'Paused map switch preserves media time');
+  if (videoState !== 'paused') assert.equal(after.frames, before.frames, 'Map switching does not imply decoded playback during loading or failure');
   await capture(page, name);
   if (page.viewport().width < 1536) {
     await textButton(page, 'Video');
-    await page.waitForSelector('button[aria-label="Play video"]', { visible: true });
+    if (videoState === 'failed') await errorVisible(page);
+    else if (videoState === 'loading') await page.waitForSelector('[aria-label="Loading video"]', { visible: true });
+    else await page.waitForSelector('button[aria-label="Play video"]', { visible: true });
+    assert.equal(await videoElement.evaluate((element, selector) => element.isConnected && element === document.querySelector(selector), VIDEO),
+      true, 'Returning to Video preserves the actual media element');
   }
 }
 
@@ -701,8 +717,8 @@ async function main() {
           await capture(page, 'missing-first-error'); await layout(page, 'error');
           if (viewport.width <= 390) await narrowErrorCard(page);
         }
-        await page.setViewport(viewports[1]); await textButton(page, 'Map');
-        await capture(page, 'map-with-error'); await errorVisible(page); await textButton(page, 'Video');
+        await page.setViewport(viewports[1]);
+        await mapCapture(page, 'map-with-error', 'failed');
         await pause(page); const later = await seek(page, 125); await settledAt(page, later);
         await page.focus(TIMELINE); await page.keyboard.press('Home'); await errorVisible(page);
         const count = result.requests.length;
@@ -875,6 +891,7 @@ async function main() {
             y: Math.abs(video.y + video.height / 2 - spinner.y - spinner.height / 2) };
         }, VIDEO);
         assert.ok(placement.x < 2 && placement.y < 2, 'Loading indicator is centered in the video');
+        await mapCapture(page, 'map-while-loading', 'loading');
         const oldVideo = await page.$(VIDEO);
         result.hold = false; await openRoute('complete'); await playing(page);
         assert.equal(await oldVideo.evaluate((element) => element.isConnected), false, 'Navigation unmounts the old route video');

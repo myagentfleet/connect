@@ -313,7 +313,7 @@ class RouteVideo extends Component {
             </span>
           </button>
         )}
-        {(error || videoStatus === VideoStatus.LOADING) && (
+        {controlsVisible && (error || videoStatus === VideoStatus.LOADING) && (
           <div className={`absolute inset-0 z-[70] pointer-events-none flex items-center justify-center bg-[#16181AAA] text-center ${error ? '' : 'animate-[drive-video-loading_150ms_ease-out_200ms_both]'}`} role="status">
             {error ? <div className="mx-3 max-w-md rounded-xl border border-white/10 bg-[#151C20]/95 p-3 sm:p-5 shadow-xl pointer-events-auto">
               <div className="flex items-start gap-2 text-left sm:flex-col sm:items-center sm:text-center">
