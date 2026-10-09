@@ -137,6 +137,7 @@ async function mediaState(page) {
     currentSrc: video.currentSrc, error: video.error?.message || null,
     sameVideo: video === window.__hlsValidationVideo,
     hlsVersion: window.Hls?.version,
+    observedAt: performance.now(),
   }));
 }
 
@@ -149,6 +150,92 @@ async function retainedPlayback(page, reference) {
   assert(state.frames >= reference.frames, 'Dialog navigation reset decoded frame count');
   assert.equal(state.error, null);
   return state;
+}
+
+async function seekTimeline(page, seconds) {
+  const timeline = await page.$('[role="slider"][aria-label="Drive timeline"]');
+  assert(timeline, 'Drive timeline is missing');
+  await timeline.scrollIntoView();
+  const box = await timeline.boundingBox();
+  assert(box && box.width > 0 && box.height > 0, 'Drive timeline is not visible');
+  await page.mouse.click(box.x + box.width * (seconds / 8), box.y + box.height * 0.5);
+  await page.waitForFunction((selector, target) => {
+    const video = document.querySelector(selector);
+    return video && video.paused && !video.seeking && Math.abs(video.currentTime - target) < 0.2;
+  }, WAIT, VIDEO, seconds);
+}
+
+async function navigateInfo(page, action) {
+  switch (action) {
+    case 'open': {
+      const moreInfo = await page.$('::-p-text(More info)');
+      assert(moreInfo, 'Route-info trigger is missing');
+      await moreInfo.click();
+      break;
+    }
+    case 'back': await page.evaluate(() => history.back()); break;
+    case 'forward': await page.evaluate(() => history.forward()); break;
+    case 'close': await page.keyboard.press('Escape'); break;
+    default: throw new Error(`Unknown dialog action: ${action}`);
+  }
+  const open = action === 'open' || action === 'forward';
+  await page.waitForFunction((expected) => new URLSearchParams(location.search).get('dialog') === expected,
+    WAIT, open ? 'route-info' : null);
+  await page.waitForSelector('#menu-info', { [open ? 'visible' : 'hidden']: true, timeout: 15000 });
+}
+
+async function retainedPlaying(page, previous) {
+  const state = await mediaState(page);
+  const elapsed = (state.observedAt - previous.observedAt) / 1000;
+  assert(state.sameVideo, 'Playing navigation replaced the video element');
+  assert.equal(state.currentSrc, previous.currentSrc, 'Playing navigation replaced the MediaSource');
+  assert(!state.paused, 'Dialog navigation paused active playback');
+  assert(state.currentTime >= previous.currentTime - 0.1, 'Playing navigation reset playback position');
+  assert(state.currentTime <= previous.currentTime + elapsed + 0.5, 'Playing navigation skipped ahead');
+  assert(state.frames >= previous.frames, 'Playing navigation reset decoded frame count');
+  assert.equal(state.error, null);
+  return state;
+}
+
+async function verifyPlayingNavigation(page, result) {
+  result.phase = 'continuous playback setup';
+  await seekTimeline(page, 1);
+  const reference = await mediaState(page);
+  await page.click('button[aria-label="Unpause"]');
+  await page.waitForFunction((selector, time, frames) => {
+    const video = document.querySelector(selector);
+    return video && !video.paused && video.currentTime > time + 0.3
+      && video.getVideoPlaybackQuality().totalVideoFrames > frames;
+  }, WAIT, VIDEO, reference.currentTime, reference.frames);
+  await page.$eval(VIDEO, (video) => {
+    window.__hlsValidationPauses = [];
+    video.addEventListener('pause', () => window.__hlsValidationPauses.push({
+      currentTime: video.currentTime, observedAt: performance.now(),
+    }));
+  });
+  const continuous = { start: await retainedPlaying(page, reference) };
+  result.continuous = continuous;
+  result.phase = 'playing open URL dialog';
+  await navigateInfo(page, 'open');
+  continuous.dialog = await retainedPlaying(page, continuous.start);
+  result.phase = 'playing Back';
+  await navigateInfo(page, 'back');
+  continuous.back = await retainedPlaying(page, continuous.dialog);
+  result.phase = 'playing Forward';
+  await navigateInfo(page, 'forward');
+  continuous.forward = await retainedPlaying(page, continuous.back);
+  result.phase = 'playing Close';
+  await navigateInfo(page, 'close');
+  continuous.closed = await retainedPlaying(page, continuous.forward);
+  continuous.pauseEvents = await page.evaluate(() => window.__hlsValidationPauses);
+  assert.deepEqual(continuous.pauseEvents, [], 'Playback paused during dialog/history navigation');
+  assert(continuous.closed.currentTime > continuous.start.currentTime + 0.2, 'Playback did not advance during navigation');
+  assert(continuous.closed.frames > continuous.start.frames, 'No new frames decoded during navigation');
+  result.phase = 'final paused capture';
+  await page.click('button[aria-label="Pause"]');
+  await page.waitForFunction((selector) => document.querySelector(selector)?.paused, WAIT, VIDEO);
+  await seekTimeline(page, 4);
+  result.finalCapture = await mediaState(page);
 }
 
 async function runCase(browser, assets, name, viewport) {
@@ -195,39 +282,21 @@ async function runCase(browser, assets, name, viewport) {
     await page.click('button[aria-label="Pause"]');
     await page.waitForFunction((selector) => document.querySelector(selector)?.paused, WAIT, VIDEO);
     result.phase = 'timeline seek';
-    const timeline = await page.$('[role="slider"][aria-label="Drive timeline"]');
-    assert(timeline, 'Drive timeline is missing');
-    await timeline.scrollIntoView();
-    const box = await timeline.boundingBox();
-    assert(box && box.width > 0 && box.height > 0, 'Drive timeline is not visible');
-    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
-    await page.waitForFunction((selector) => {
-      const video = document.querySelector(selector);
-      return video && video.paused && !video.seeking && Math.abs(video.currentTime - 4) < 0.2;
-    }, WAIT, VIDEO);
+    await seekTimeline(page, 4);
     result.seek = await mediaState(page);
     result.phase = 'open URL dialog';
-    const moreInfo = await page.$('::-p-text(More info)');
-    assert(moreInfo, 'Route-info trigger is missing');
-    await moreInfo.click();
-    await page.waitForFunction(() => new URLSearchParams(location.search).get('dialog') === 'route-info', WAIT);
-    await page.waitForSelector('#menu-info', { visible: true, timeout: 15000 });
+    await navigateInfo(page, 'open');
     result.dialog = await retainedPlayback(page, result.seek);
     result.phase = 'Back';
-    await page.evaluate(() => history.back());
-    await page.waitForFunction(() => !new URLSearchParams(location.search).has('dialog'), WAIT);
-    await page.waitForSelector('#menu-info', { hidden: true, timeout: 15000 });
+    await navigateInfo(page, 'back');
     result.back = await retainedPlayback(page, result.seek);
     result.phase = 'Forward';
-    await page.evaluate(() => history.forward());
-    await page.waitForFunction(() => new URLSearchParams(location.search).get('dialog') === 'route-info', WAIT);
-    await page.waitForSelector('#menu-info', { visible: true, timeout: 15000 });
+    await navigateInfo(page, 'forward');
     result.forward = await retainedPlayback(page, result.seek);
     result.phase = 'Close';
-    await page.keyboard.press('Escape');
-    await page.waitForFunction(() => !new URLSearchParams(location.search).has('dialog'), WAIT);
-    await page.waitForSelector('#menu-info', { hidden: true, timeout: 15000 });
+    await navigateInfo(page, 'close');
     result.closed = await retainedPlayback(page, result.seek);
+    await verifyPlayingNavigation(page, result);
     assert.equal(new URL(page.url()).pathname, DRIVE_PATH);
     assert.equal(result.sdkRequests, 1, 'Dialog changes reloaded the HLS SDK');
     assert.equal(result.manifestRequests, 1, 'Dialog changes restarted the HLS source');
