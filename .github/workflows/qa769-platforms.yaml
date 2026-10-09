@@ -1,5 +1,5 @@
-# Native HLS diagnostics with synthetic and explicitly public production media.
-name: qa769-production-native-reference
+# Exact-source application checks. Native screenshots require a separate visual review.
+name: qa769-native-seek-recovery
 
 on:
   push:
@@ -10,24 +10,33 @@ permissions:
   contents: read
 
 jobs:
-  safari:
+  native:
     if: github.ref == 'refs/heads/qa/769-platforms'
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 15
     env:
-      QA_CANDIDATE_SHA: 2d3bca154c33b09416f9826fad113863adb25946
-      QA769_OUTPUT: ${{ github.workspace }}/results/production-native
+      QA_CANDIDATE_SHA: 0996a76f1a3d963cde7f0d10b211c5cd02fb0c0e
+      QA769_OUTPUT: ${{ github.workspace }}/results/native-seek
+      QA769_ENGINE: webkit
+      QA769_NATIVE_PROFILE: 'true'
+      QA769_FRAME_OBSERVER: 'false'
+      QA769_TRACE_COMMANDS: 'false'
+      QA769_DIAGNOSTIC_ONLY: 'true'
+      QA769_CASE: native-ui-pixels-healthy-75,native-ui-pixels-healthy-125,native-ui-pixels-repaired-middle-75,native-manifest-error-and-repaired-retry,native-first-available-startup,native-missed-seek-retry,native-missed-seek-seek
+      VITE_POSTHOG_KEY: ''
+      VITE_POSTHOG_HOST: ''
+      E2E: 'true'
     defaults:
       run:
         shell: bash
         working-directory: application
     steps:
-      - name: Checkout diagnostic harness
+      - name: Checkout validation harness
         uses: actions/checkout@v4
         with:
           path: harness
           persist-credentials: false
-      - name: Checkout exact application revision
+      - name: Checkout exact application source
         uses: actions/checkout@v4
         with:
           ref: ${{ env.QA_CANDIDATE_SHA }}
@@ -39,27 +48,56 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
-      - name: Record source identity and copy diagnostic scripts
+      - name: Record source and copy the reviewed harness
         run: |
           test "$(git rev-parse HEAD)" = "$QA_CANDIDATE_SHA"
           mkdir -p "$QA769_OUTPUT"
           git rev-parse HEAD > "$QA769_OUTPUT/source-sha.txt"
-          cp ../harness/scripts/qa769-safari-production.mjs scripts/qa769-safari-production.mjs
-          cp ../harness/scripts/qa769-public-qcamera.mjs scripts/qa769-public-qcamera.mjs
+          echo "VITE_APP_GIT_SHA=$QA_CANDIDATE_SHA" >> "$GITHUB_ENV"
+          cp ../harness/scripts/qa769-platforms.mjs scripts/qa769-platforms.mjs
       - name: Install frozen application dependencies
         run: bun install --frozen-lockfile 2>&1 | tee "$QA769_OUTPUT/install.log"
-      - name: Install FFmpeg for reference-frame decoding
+      - name: Install the pinned standard WebKit harness
         run: |
-          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
-            brew install ffmpeg
-          fi
-      - name: Compare native playback using the pre-enabled stock Safari driver
-        run: node scripts/qa769-safari-production.mjs 2>&1 | tee "$QA769_OUTPUT/production-native.log"
-      - name: Upload every diagnostic outcome
+          bun add --no-save playwright@1.64.0 2>&1 | tee "$QA769_OUTPUT/browser-tools.log"
+          npx --no-install playwright install --with-deps webkit 2>&1 | tee "$QA769_OUTPUT/browser-install.log"
+      - name: Check native playback and explicit error recovery without RVFC
+        run: node scripts/qa769-platforms.mjs 2>&1 | tee "$QA769_OUTPUT/native-seek.log"
+      - name: Require all native measurements and recovery checks
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import { resolve } from 'node:path';
+          const report = JSON.parse(readFileSync(resolve(process.env.QA769_OUTPUT, 'report.json'), 'utf8'));
+          assert.equal(report.sha, process.env.QA_CANDIDATE_SHA);
+          assert.equal(report.traceCommands, false);
+          assert.equal(report.observeFrames, false);
+          assert.equal(report.acceptanceRun, false);
+          assert.equal(report.passed, true);
+          assert.deepEqual(report.cases.map(({ name }) => name).sort(), process.env.QA769_CASE.split(',').sort());
+          assert.ok(report.cases.every(({ status, pageErrors, frameMetadata }) => ['passed', 'observed'].includes(status)
+            && pageErrors.length === 0 && frameMetadata.length === 0));
+          for (const entry of report.cases.filter(({ name }) => name.startsWith('native-ui-pixels-'))) {
+            assert.equal(entry.startup.passed, true);
+            assert.equal(entry.clockSettled, true);
+            assert.equal(entry.stablePaused, true);
+            assert.equal(entry.timelineFollowsClock, true);
+            assert.equal(entry.resumed.passed, true);
+          }
+          for (const entry of report.cases.filter(({ name }) => name.startsWith('native-missed-seek-'))) {
+            assert.equal(entry.startup.passed, true);
+            assert.equal(entry.errorSamples.length, 6);
+            assert.equal(entry.recoveredSamples.length, 6);
+            assert.equal(entry.resumed.passed, true);
+          }
+          console.log('All seven exact-source native scenarios satisfied their checks. Presented frames and layouts still require visual review.');
+          JS
+      - name: Upload all outcomes
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa769-production-native-${{ github.run_id }}
-          path: results/production-native
+          name: qa769-native-seek-${{ github.run_id }}
+          path: results/native-seek
           if-no-files-found: warn
           retention-days: 7
