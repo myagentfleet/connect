@@ -285,17 +285,20 @@ async function downloadBaseline(baselineUrl, destination) {
 }
 
 async function fetchFixtures() {
+  const startedAt = performance.now();
   const routeUrl = `https://api.commadotai.com/v1/route/${encodeURIComponent(ROUTE_NAME)}/`;
   const route = await (await getResponse(routeUrl)).json();
   const assetRoot = new URL(route.url);
   if (assetRoot.protocol !== 'https:') throw new Error(`Expected an HTTPS route asset URL, got ${route.url}`);
   const assetRootUrl = assetRoot.href.replace(/\/$/, '');
-  const segmentEvents = await Promise.all(
-    Array.from({ length: route.maxqlog + 1 }, async (_, segment) => (
+  const [segmentEvents, sprite, clip] = await Promise.all([
+    Promise.all(Array.from({ length: route.maxqlog + 1 }, async (_, segment) => (
       (await getResponse(`${assetRootUrl}/${segment}/events.json`)).json()
-    )),
-  );
-  const sprite = await getResponse(`${assetRootUrl}/0/sprite.jpg`);
+    ))),
+    getResponse(`${assetRootUrl}/0/sprite.jpg`).then((response) => response.arrayBuffer()),
+    readFile(new URL('./fixtures/gallery-test-pattern.mp4', import.meta.url)),
+  ]);
+  console.log(`Prepared route fixtures in ${Math.round(performance.now() - startedAt)} ms`);
   return {
     events: segmentEvents.map((events) => events.map((event) => ({
       ...event,
@@ -306,8 +309,8 @@ async function fetchFixtures() {
           : event.data?.alertStatus,
       },
     }))),
-    sprite: Buffer.from(await sprite.arrayBuffer()),
-    clip: await readFile(new URL('./fixtures/gallery-test-pattern.mp4', import.meta.url)),
+    sprite: Buffer.from(sprite),
+    clip,
   };
 }
 
