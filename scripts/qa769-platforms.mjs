@@ -14,6 +14,7 @@ const fixtures = resolve(process.env.QA769_FIXTURES || 'public/demo-video');
 const engine = process.env.QA769_ENGINE || 'firefox';
 const nativeProfile = process.env.QA769_NATIVE_PROFILE === 'true';
 const caseFilter = process.env.QA769_CASE || null;
+const requestedCases = caseFilter?.split(',').map((name) => name.trim()).filter(Boolean);
 const VIDEO = '.DriveView video';
 const TIMELINE = '[role="slider"][aria-label="Drive timeline"]';
 const OVERLAY = 'button[aria-label="Play video"],button[aria-label="Pause video"]';
@@ -23,6 +24,7 @@ const ids = { complete: 11, first: 12, middle: 13 };
 const link = (kind) => `.DriveEntry[href="/deadbeefdeadbeef/00000000--${String(ids[kind]).padStart(10, '0')}"]`;
 const report = {
   started: new Date().toISOString(), engine, nativeProfile, caseFilter, hostOS: process.platform,
+  acceptanceRun: process.env.QA769_DIAGNOSTIC_ONLY !== 'true',
   scope: 'Production build, Playwright-patched browser engine, real media decoding and native media clock. All transport commands use application controls.',
   profile: nativeProfile ? 'macOS WebKit with Playwright iPhone 13 emulation; requires native HLS. This is not physical iOS or branded Safari.' : 'Unmodified desktop browser capabilities; application selects its normal transport.',
   fixtures: 'Checked-in H.264/AAC MPEG-TS bytes. A local HTTP server supplies manifests, real 404 responses, repaired bytes and held requests, including byte ranges; only API metadata and map style are browser-intercepted.',
@@ -42,6 +44,7 @@ const media = (page) => page.locator(VIDEO).evaluate((video) => ({
   paused: video.paused, seeking: video.seeking, ready: video.readyState, rate: video.playbackRate, muted: video.muted,
   width: video.videoWidth, height: video.videoHeight, frames: video.getVideoPlaybackQuality?.().totalVideoFrames ?? null,
   presentedFrames: globalThis.qaFrames.get(video) ?? null,
+  presentedFrame: globalThis.qaLastFrame.get(video) ?? null,
   currentSrc: video.currentSrc, transport: video.currentSrc.startsWith('blob:') ? 'MSE' : 'native URL',
   hlsModuleLoaded: performance.getEntriesByType('resource').some(({ name }) => /\/hls-[^/]+\.js/.test(name)),
   buffered: Array.from({ length: video.buffered.length }, (_, i) => [video.buffered.start(i), video.buffered.end(i)]),
@@ -96,6 +99,28 @@ async function settledAt(page, target) {
       && !document.querySelector('[aria-label="Loading video"]')
       && ![...document.querySelectorAll('button')].some((element) => element.textContent.trim() === 'Retry');
   }, { videoSelector: VIDEO, sliderSelector: TIMELINE, target });
+}
+async function pausedFrameAt(page, target, previousFrameAt) {
+  await settledAt(page, target);
+  await page.waitForFunction(({ selector, target, previousFrameAt }) => {
+    const frame = globalThis.qaLastFrame.get(document.querySelector(selector));
+    return frame && frame.at > previousFrameAt && Math.abs(frame.mediaTime - target) < 0.6;
+  }, { selector: VIDEO, target, previousFrameAt });
+}
+async function geometry(page, result, phase) {
+  const state = await page.evaluate(() => {
+    const bounds = (selector) => document.querySelector(selector)?.getBoundingClientRect().toJSON() || null;
+    const main = document.querySelector('main');
+    return { at: performance.now(), innerWidth, innerHeight, clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth, scrollX, scrollY,
+      mainMarginLeft: main?.style.marginLeft || null, mainComputedMarginLeft: main && getComputedStyle(main).marginLeft,
+      main: bounds('main'), drive: bounds('.DriveView'), video: bounds('.DriveView video'),
+      timeline: bounds('[aria-label="Drive timeline"]'), controls: bounds('[aria-label="Playback controls"]') };
+  });
+  const entry = { phase, ...state };
+  result.viewportGeometry ||= []; result.viewportGeometry.push(entry);
+  console.log(`VIEWPORT_GEOMETRY ${JSON.stringify(entry)}`);
+  return state;
 }
 async function errorVisible(page) {
   // hls.js retries fragments for approximately 31 seconds; native engines have their own network policy.
@@ -172,6 +197,10 @@ async function main() {
       let bytes = assets.get(file);
       if (file.endsWith('.m3u8')) {
         assert.ok(active, 'A scenario owns each manifest request');
+        if (active.failManifest) {
+          active.result.httpRequests.push({ path, at: Date.now(), manifest: true, failedManifest: true, status: 404 });
+          respond(req, res, 'BlobNotFound', 404, 'text/plain'); return;
+        }
         const kind = file.startsWith('missing-first') ? 'first' : 'middle';
         bytes = bytes.toString().replace(/^https:.*$/gm, `/__qa/${active.id}/missing-${kind}.ts`)
           .replace(/^(\d+\/qcamera\.ts)$/gm, `/__qa/${active.id}/$1`);
@@ -189,13 +218,13 @@ async function main() {
     // Standard Playwright launch; no browser security flags or media capability overrides.
     browser = await ({ firefox, webkit }[engine]).launch({ headless: false });
     report.browserVersion = browser.version();
-    async function scenario(name, run) {
-      if (caseFilter && name !== caseFilter) return;
+    async function scenario(name, run, { diagnostic = false } = {}) {
+      if (requestedCases && !requestedCases.includes(name)) return;
       const context = await browser.newContext({ ...(nativeProfile ? devices['iPhone 13'] : { viewport: { width: 1280, height: 800 } }),
         timezoneId: 'America/Los_Angeles', serviceWorkers: 'block' });
       const page = await context.newPage();
       page.setDefaultTimeout(20000);
-      const result = { name, status: 'running', pageErrors: [], console: [], requestFailures: [], httpRequests: [] };
+      const result = { name, status: 'running', diagnostic, pageErrors: [], console: [], requestFailures: [], httpRequests: [] };
       const session = { id: String(report.cases.length + 1), result, healed: new Set(), held: [], hold: false };
       sessions.set(session.id, session); active = session; report.cases.push(result);
       page.on('pageerror', (error) => result.pageErrors.push(error.message));
@@ -204,7 +233,8 @@ async function main() {
       try {
         await page.addInitScript(() => {
           performance.setResourceTimingBufferSize(3000);
-          globalThis.qaEvents = []; globalThis.qaFrames = new WeakMap(); let nextId = 0;
+          globalThis.qaEvents = []; globalThis.qaFrames = new WeakMap();
+          globalThis.qaLastFrame = new WeakMap(); globalThis.qaFrameMetadata = []; let nextId = 0;
           for (const type of ['loadedmetadata', 'playing', 'pause', 'seeking', 'seeked', 'waiting', 'ended', 'error', 'emptied', 'ratechange', 'timeupdate']) {
             document.addEventListener(type, ({ target }) => {
               if (!(target instanceof HTMLVideoElement)) return;
@@ -212,7 +242,13 @@ async function main() {
                 target.dataset.qaVideo = String(++nextId);
                 if (target.requestVideoFrameCallback) {
                   globalThis.qaFrames.set(target, 0);
-                  const frame = () => { globalThis.qaFrames.set(target, globalThis.qaFrames.get(target) + 1);
+                  const frame = (at, metadata) => {
+                    globalThis.qaFrames.set(target, globalThis.qaFrames.get(target) + 1);
+                    const sample = { id: target.dataset.qaVideo, at, mediaTime: metadata.mediaTime,
+                      presentedFrames: metadata.presentedFrames, expectedDisplayTime: metadata.expectedDisplayTime,
+                      currentTime: target.currentTime, paused: target.paused };
+                    globalThis.qaLastFrame.set(target, sample); globalThis.qaFrameMetadata.push(sample);
+                    if (globalThis.qaFrameMetadata.length > 3000) globalThis.qaFrameMetadata.shift();
                     if (target.isConnected) target.requestVideoFrameCallback(frame); };
                   target.requestVideoFrameCallback(frame);
                 }
@@ -266,12 +302,13 @@ async function main() {
         };
         await run({ page, result, session, openRoute });
         assert.deepEqual(result.pageErrors, [], 'No uncaught application errors');
-        result.status = 'passed';
+        result.status = diagnostic ? 'observed' : 'passed';
       } catch (error) {
         result.status = 'failed'; result.error = error.stack;
         await capture(page, `${name}-failure`).catch((error) => { result.screenshotError = error.message; });
       } finally {
         result.mediaEvents = await page.evaluate(() => globalThis.qaEvents).catch(() => []);
+        result.frameMetadata = await page.evaluate(() => globalThis.qaFrameMetadata).catch(() => []);
         result.finalMedia = await media(page).catch(() => null);
         result.finalText = await page.locator('body').innerText().catch(() => '');
         for (const { req, res } of session.held) respond(req, res, 'BlobNotFound', 404, 'text/plain');
@@ -305,7 +342,19 @@ async function main() {
       result.decodedMedia = await media(page);
       for (const width of nativeProfile ? [390] : [1280, 390]) {
         await page.setViewportSize({ width, height: width < 600 ? 844 : 800 });
+        await geometry(page, result, 'immediately-after-resize');
+        // The existing window-size subscription debounces for 150ms. Observe its resulting layout, not its transition.
+        await delay(200);
+        await page.waitForFunction(() => {
+          const selectors = ['.DriveView', '.DriveView video', '[aria-label="Playback controls"]'];
+          return document.documentElement.scrollWidth <= innerWidth + 1 && selectors.every((selector) => {
+            const box = document.querySelector(selector)?.getBoundingClientRect();
+            return box && box.width > 0 && box.left >= -1 && box.right <= innerWidth + 1;
+          });
+        });
+        await geometry(page, result, 'before-screenshot');
         await capture(page, 'paused-player');
+        await geometry(page, result, 'after-screenshot');
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'The player fits the viewport');
       }
     });
@@ -372,12 +421,68 @@ async function main() {
       assert.equal(await button(page, 'Retry').count(), 0, 'Old failure does not appear on the new route');
       await capture(page, 'navigation-recovered');
     });
+    if (nativeProfile) {
+      await scenario('native-gap-observations', async ({ page, result, session, openRoute }) => {
+        result.acceptance = 'Not an acceptance pass: records native gap behavior, including stale frames at the missing middle. Valid later/repaired frames are checked independently.';
+        result.observations = {};
+        await openRoute('first'); await playing(page);
+        assert.ok(result.httpRequests.some(({ missing, status }) => missing === 'first' && status === 404), 'Native startup really encounters the first-fragment 404');
+        await page.waitForFunction((selector) => document.querySelector(selector).currentTime >= 60, VIDEO);
+        await pause(page);
+        await page.waitForFunction(({ video, timeline }) => Math.abs(document.querySelector(video).currentTime
+          - Number(document.querySelector(timeline).getAttribute('aria-valuenow'))) < 0.25, { video: VIDEO, timeline: TIMELINE });
+        result.observations.firstGapSkip = await media(page);
+        assert.ok(result.observations.firstGapSkip.presentedFrame?.mediaTime >= 60, 'Automatic skipping presents a real frame after the first gap');
+        await capture(page, 'native-first-automatic-skip');
+
+        await openRoute('middle'); await playing(page); await pause(page);
+        const target = await seek(page, 75); await settledAt(page, target);
+        await eventually(() => result.httpRequests.some(({ missing, status }) => missing === 'middle' && status === 404), 'Native middle gap really returns HTTP 404');
+        await delay(500);
+        result.observations.middlePaused = await media(page);
+        result.observations.middlePaused.stalePresentedFrame = Math.abs((result.observations.middlePaused.presentedFrame?.mediaTime ?? -Infinity) - target) > 0.6;
+        await capture(page, 'native-middle-paused-observation');
+        await button(page, 'Play').click(); await delay(2000);
+        result.observations.middleResumed = await media(page);
+        await capture(page, 'native-middle-resumed-observation'); await pause(page);
+
+        const previous = (await media(page)).presentedFrame?.at ?? -1;
+        await pausedFrameAt(page, await seek(page, 125), previous);
+        result.observations.laterPaused = await media(page);
+        await button(page, 'Play').click(); await playing(page); await pause(page);
+        await capture(page, 'native-valid-later-frame');
+
+        const requestCount = result.httpRequests.length; session.healed.add('middle');
+        await openRoute('middle'); await playing(page); await pause(page);
+        const priorRepairFrame = (await media(page)).presentedFrame?.at ?? -1;
+        await pausedFrameAt(page, await seek(page, 75), priorRepairFrame);
+        assert.ok(result.httpRequests.slice(requestCount).some(({ missing, repaired, status }) => missing === 'middle' && repaired && status === 200),
+          'Reopening after repair requests actual missing-middle bytes');
+        result.observations.repairedPaused = await media(page);
+        await button(page, 'Play').click(); await playing(page); await pause(page);
+        await capture(page, 'native-repaired-middle-frame');
+        console.log(`NATIVE_GAP_OBSERVATIONS ${JSON.stringify(result.observations)}`);
+      }, { diagnostic: true });
+      await scenario('native-manifest-error-and-repaired-retry', async ({ page, result, session, openRoute }) => {
+        session.failManifest = true;
+        await openRoute('complete'); await errorVisible(page);
+        assert.ok(result.httpRequests.some(({ failedManifest, status }) => failedManifest && status === 404), 'A real missing manifest causes the terminal native error');
+        assert.equal(await page.locator(OVERLAY).count(), 0, 'Fatal native error replaces the video overlay');
+        await capture(page, 'native-manifest-error'); await pause(page);
+        const count = result.httpRequests.length; session.failManifest = false;
+        await button(page, 'Retry').click(); await settledAt(page, 0);
+        assert.ok(result.httpRequests.slice(count).some(({ manifest, failedManifest }) => manifest && !failedManifest), 'Retry really refetches the repaired manifest');
+        await button(page, 'Play').click(); await playing(page); await pause(page);
+        result.repairedMedia = await media(page); await capture(page, 'native-manifest-repaired');
+      });
+    }
   } finally {
     if (browser) await browser.close();
     await server.close();
   }
   assert.ok(report.cases.length, 'At least one requested scenario ran');
-  report.finished = new Date().toISOString(); report.passed = report.cases.every(({ status }) => status === 'passed');
+  if (requestedCases) assert.deepEqual(report.cases.map(({ name }) => name).sort(), [...requestedCases].sort(), 'Every requested diagnostic scenario ran');
+  report.finished = new Date().toISOString(); report.passed = report.cases.every(({ status, diagnostic }) => status === 'passed' || (diagnostic && status === 'observed'));
   await save(); assert.ok(report.passed, 'One or more platform scenarios failed; inspect report and screenshots');
 }
 main().catch(async (error) => {
