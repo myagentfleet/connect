@@ -13,6 +13,7 @@ const execute = promisify(execFile);
 const output = resolve(process.env.QA769_OUTPUT || 'qa769-results');
 const fixtures = resolve(process.env.QA769_FIXTURES || 'public/demo-video');
 const captureOnly = process.env.QA769_CAPTURE_ONLY === 'true';
+const caseFilter = process.env.QA769_CASE?.trim() || null;
 const VIDEO = '.DriveView video';
 const TIMELINE = '[role="slider"][aria-label="Drive timeline"]';
 const SPEED = 'button[aria-label="Playback speed"]';
@@ -23,7 +24,7 @@ const routes = { complete: 11, first: 12, middle: 13 };
 const viewports = [320, 390, 1280, 1600].map((width) => ({ width, height: width < 600 ? 844 : 800, deviceScaleFactor: 1 }));
 const report = {
   started: new Date().toISOString(), revision: process.env.QA769_REVISION_LABEL || 'candidate',
-  captureOnly, cases: [], layouts: [], screenshots: [],
+  captureOnly, caseFilter, cases: [], layouts: [], screenshots: [],
   scope: 'Production build, real Google Chrome, native media events, checked-in H.264/AAC MPEG-TS fixtures, UI-only playback commands. The explicitly labeled MSE scenario overrides only HLS capability discovery to exercise hls.js.',
   fixtures: 'Public-route metadata is deterministic; exact missing fragment URLs receive HTTP 404 via request interception, or real TS bytes after repair. Mapbox style is a plain deterministic background; the production WebGL route and marker render normally.',
   omissions: ['Native Safari/iOS/Android and installed PWAs', 'Physical audio output, Bluetooth, background/foreground and OS media controls', 'Production map tiles and real driving footage', 'Deterministically delayed native play promise rejection (covered separately by unit tests)'],
@@ -239,6 +240,31 @@ async function scrollToTop(page) {
   });
 }
 
+async function overlayHoverDiagnostics(overlay, point) {
+  return overlay.evaluate((button, point) => {
+    const span = button.firstElementChild;
+    const describe = (element) => element && ({ tag: element.tagName, classes: element.className,
+      label: element.getAttribute('aria-label'), text: element.textContent.trim().slice(0, 80) });
+    const computed = (element) => {
+      const style = getComputedStyle(element);
+      return { opacity: style.opacity, display: style.display, visibility: style.visibility,
+        pointerEvents: style.pointerEvents, zIndex: style.zIndex, transition: style.transition };
+    };
+    return {
+      at: performance.now(), viewport: { width: innerWidth, height: innerHeight }, scroll: { x: scrollX, y: scrollY },
+      mediaQueries: Object.fromEntries(['(hover: hover)', '(hover: none)', '(any-hover: hover)', '(pointer: fine)', '(pointer: coarse)']
+        .map((query) => [query, matchMedia(query).matches])),
+      button: { ...describe(button), connected: button.isConnected, hovered: button.matches(':hover'),
+        focused: document.activeElement === button, focusVisible: button.matches(':focus-visible'),
+        rect: button.getBoundingClientRect().toJSON(), computed: computed(button) },
+      span: { ...describe(span), hovered: span.matches(':hover'), computed: computed(span),
+        groupHoverSelectorMatches: span.matches(`.${CSS.escape('group-hover:opacity-100')}:is(:where(.group):hover *)`) },
+      point, hit: describe(document.elementFromPoint(point.x, point.y)),
+      hitStack: document.elementsFromPoint(point.x, point.y).slice(0, 6).map(describe),
+    };
+  }, point);
+}
+
 async function layout(page, state) {
   await scrollToTop(page);
   const measured = await page.evaluate(() => {
@@ -361,6 +387,7 @@ async function main() {
   report.browser = await browser.version();
 
   async function scenario(name, run, { forceMse = false, comparison = false } = {}) {
+    if (caseFilter && name !== caseFilter) return;
     const context = await browser.createBrowserContext();
     const page = await context.newPage();
     const result = { name, status: 'running', forceMse, comparison, requests: [], console: [], pageErrors: [], held: [], healed: new Set() };
@@ -461,7 +488,7 @@ async function main() {
       result.status = 'passed';
     } catch (error) {
       result.status = 'failed'; result.error = error.stack;
-      await capture(page, `${name}-failure`).catch(() => {});
+      await capture(page, `${name}-failure`, true).catch(() => {});
     } finally {
       result.mediaEvents = await page.evaluate(() => globalThis.qaEvents).catch(() => []);
       result.finalText = await page.$eval('body', (body) => body.innerText).catch(() => '');
@@ -504,7 +531,7 @@ async function main() {
     }, { comparison: true });
 
     if (!captureOnly) {
-      await scenario('controls-and-responsive', async ({ page, openRoute }) => {
+      await scenario('controls-and-responsive', async ({ page, result, openRoute }) => {
         await openRoute('complete'); await playing(page); await pause(page);
         const paused = await media(page); await delay(400);
         assert.ok(Math.abs((await media(page)).time - paused.time) < 0.05, 'Pause stops the actual clock');
@@ -533,7 +560,18 @@ async function main() {
         await textButton(page, 'Video'); await playing(page);
         const overlay = await page.waitForSelector('button[aria-label="Pause video"]', { visible: true });
         await overlay.hover();
-        await page.waitForFunction((element) => getComputedStyle(element.firstElementChild).opacity === '1', {}, overlay);
+        const hoverPoint = await overlay.clickablePoint();
+        result.overlayHover = { beforeWait: await overlayHoverDiagnostics(overlay, hoverPoint) };
+        console.log(`OVERLAY_HOVER_BEFORE_WAIT ${JSON.stringify(result.overlayHover.beforeWait)}`);
+        await writeFile(resolve(output, 'report.json'), JSON.stringify(report, null, 2));
+        try {
+          await page.waitForFunction((element) => getComputedStyle(element.firstElementChild).opacity === '1', {}, overlay);
+        } catch (error) {
+          result.overlayHover.onFailure = await overlayHoverDiagnostics(overlay, hoverPoint)
+            .catch((diagnosticError) => ({ error: diagnosticError.message }));
+          console.log(`OVERLAY_HOVER_FAILURE ${JSON.stringify(result.overlayHover.onFailure)}`);
+          throw error;
+        }
         assert.equal((await media(page)).id, active.id, 'Returning to Video restores the overlay on the same playing media');
         await pause(page);
         await page.waitForSelector('.DriveView .thumbnailImage.images');
@@ -679,6 +717,7 @@ async function main() {
     await browser.close(); await server.close();
   }
   report.finished = new Date().toISOString();
+  assert.ok(report.cases.length > 0, `No browser QA scenarios matched QA769_CASE=${caseFilter}`);
   report.passed = report.cases.every(({ status }) => status === 'passed');
   await writeFile(resolve(output, 'report.json'), JSON.stringify(report, null, 2));
   assert.ok(report.passed, 'One or more browser QA scenarios failed; inspect report.json and screenshots');
