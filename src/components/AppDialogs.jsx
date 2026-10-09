@@ -30,7 +30,7 @@ const AppDialogs = ({ navigation, dongleId, device, devices, profile, dispatch }
   if (loading || unavailable) {
     return (
       <Modal open onClose={onClose} className="flex items-center justify-center">
-        <Paper className="p-4 outline-none">
+        <Paper role="dialog" aria-modal="true" aria-label={loading ? 'Loading device' : 'Device unavailable'} className="p-4 outline-none">
           {loading ? <CircularProgress size={32} aria-label="Loading device" /> : <Typography>No access to this device.</Typography>}
           <Button onClick={onClose}>Close</Button>
         </Paper>

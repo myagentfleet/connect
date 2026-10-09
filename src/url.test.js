@@ -32,6 +32,7 @@ describe('application URLs', () => {
     `${DRIVE}/NaN/20`, `${DRIVE}/0/Infinity`, `${DRIVE}/10/10`, `${DRIVE}/20/10`,
     `${DRIVE}/-1/10`, `${DRIVE}/0/9007199254740992`, `/${DEVICE}//${LOG}`,
     `${DRIVE}/0.0000001/0.0000002`, `${DRIVE}/1e-7/2e-7`,
+    `${DRIVE}/0/9007199254740.992`, `/${DEVICE}/0/9007199254740992`,
     `/${DEVICE}/not-a-route/1/2`, '/auth/code/provider',
   ])('rejects malformed route %s', (url) => {
     const route = parseLocation(url);
@@ -46,6 +47,25 @@ describe('application URLs', () => {
       expect(parseLocation(formatLocation(route))).toMatchObject(route);
     },
   );
+
+  it.each([
+    [9007199254740988, 9007199254740989, '9007199254740.988/9007199254740.989'],
+    [9007199254740990, Number.MAX_SAFE_INTEGER, '9007199254740.99/9007199254740.991'],
+  ])('preserves exact millisecond ranges at the safe-integer boundary (%s, %s)', (start, end, seconds) => {
+    const route = { page: 'drive', dongleId: DEVICE, logId: LOG, range: { start, end } };
+    const pathname = `${DRIVE}/${seconds}`;
+    expect(formatLocation(route)).toBe(pathname);
+    expect(parseLocation(pathname)).toMatchObject(route);
+    expect(parseLocation(`/${DEVICE}/${start}/${end}`).legacyRange).toEqual({ start, end });
+  });
+
+  it.each([
+    [{ start: 0, end: 1 }, '0/0.001'],
+    [{ start: 1000, end: 1010 }, '1/1.01'],
+    [{ start: 1230, end: 2000 }, '1.23/2'],
+  ])('formats canonical seconds without unnecessary fractional zeros (%j)', (range, seconds) => {
+    expect(formatLocation({ page: 'drive', dongleId: DEVICE, logId: LOG, range })).toBe(`${DRIVE}/${seconds}`);
+  });
 
   it.each([
     [`/${DEVICE}?dialog=settings`, 'settings', DEVICE],

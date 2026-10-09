@@ -32,6 +32,7 @@ const GALLERY_STATES = [
   { name: 'checkout', label: 'Prime checkout', path: `/${DONGLE_ID}/prime`, readyText: '24/7 connectivity' },
   { name: 'management', label: 'Prime management', path: `/${DONGLE_ID}/prime`, readyText: 'Next payment' },
   { name: 'teleop', label: 'Teleop', path: `/${DONGLE_ID}/stream`, readyText: 'comma body' },
+  { name: 'referrals', label: 'Referrals', path: '/referrals', readyText: 'claim rewards ($50)' },
   {
     name: 'pair-device-modal',
     label: 'Pair device modal',
@@ -98,6 +99,24 @@ const GALLERY_STATES = [
     page: 'dashboard',
     pairToken: 'eyJhbGciOiJub25lIn0.eyJpZGVudGl0eSI6ImdhbGxlcnkifQ.',
     modalText: 'Pairing device',
+  },
+  {
+    name: 'downloads-url',
+    label: 'Downloads (direct link)',
+    page: 'drive',
+    path: `/${DONGLE_ID}/${LOG_ID}?dialog=downloads`,
+    newUrlState: true,
+    readyText: 'View upload queue',
+    modalText: 'All logs',
+  },
+  {
+    name: 'route-info-url',
+    label: 'Route information (direct link)',
+    page: 'drive',
+    path: `/${DONGLE_ID}/${LOG_ID}?dialog=route-info`,
+    newUrlState: true,
+    readyText: 'Public access',
+    modalText: 'Preserved',
   },
   {
     name: 'clips-menu-url',
@@ -436,6 +455,7 @@ async function mockGalleryRequest(request, origin, pageName, fixtures, state) {
     }
     if (path === `/v1/devices/${DONGLE_ID}/routes_segments`) return jsonResponse(request, [data.route]);
     if (path === `/v1/devices/${DONGLE_ID}/routes/preserved`) return jsonResponse(request, [data.route]);
+    if (path === `/v1/devices/${DONGLE_ID}/athena_offline_queue`) return jsonResponse(request, []);
     if (path === `/v1/route/${ROUTE_NAME}/files`) return jsonResponse(request, {});
     if (path === `/v1/route/${ROUTE_NAME}/qcamera.m3u8`) {
       return request.respond({
@@ -449,6 +469,13 @@ async function mockGalleryRequest(request, origin, pageName, fixtures, state) {
     if (path === '/v2/pilotpair') return undefined;
   }
   if (url.hostname === 'billing.comma.ai') {
+    if (path === '/v1/referrals') {
+      return jsonResponse(request, {
+        code: 'GALLERY',
+        cash: { available: 50, claimed: 50, pending: 50 },
+        referrals: [{ ordered_at: Math.floor(FIXED_TIMESTAMP / 1000) - (86400 * 60), status: 'available' }],
+      });
+    }
     if (path === '/v1/prime/subscribe_info') return jsonResponse(request, data.subscribeInfo);
     if (path === '/v1/prime/subscription') {
       return jsonResponse(request, state.missingSubscription ? null : data.subscription);

@@ -30,10 +30,21 @@ export function isDongleId(value) {
 function parseRange(parts, scale) {
   if (parts.length !== 2 || !parts.every((part) => timePattern.test(part))) return null;
   if (scale === 1 && parts.some((part) => part.includes('.'))) return null;
-  const [start, end] = parts.map((part) => Math.round(Number(part) * scale));
-  if (!Number.isFinite(start) || !Number.isFinite(end)
-      || start < 0 || start >= end || end > Number.MAX_SAFE_INTEGER) return null;
+  const [start, end] = parts.map((part) => {
+    if (scale === 1) return Number(part);
+    const [seconds, fraction = ''] = part.split('.');
+    return Number(seconds + fraction.padEnd(3, '0'));
+  });
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+      || start < 0 || start >= end) return null;
   return { start, end };
+}
+
+function formatSeconds(milliseconds) {
+  // Insert the decimal without losing millisecond digits near the safe-integer limit.
+  const digits = String(Math.round(milliseconds)).padStart(4, '0');
+  const fraction = digits.slice(-3).replace(/0+$/, '');
+  return digits.slice(0, -3) + (fraction ? '.' + fraction : '');
 }
 
 export function sameRange(a, b) {
@@ -98,7 +109,7 @@ export function formatLocation({ page = 'dashboard', dongleId, logId, range }) {
   const parts = [dongleId];
   if (page === 'drive') {
     parts.push(logId);
-    if (range) parts.push(range.start / 1000, range.end / 1000);
+    if (range) parts.push(formatSeconds(range.start), formatSeconds(range.end));
   } else if (page === 'prime' || page === 'stream') {
     parts.push(page);
   }

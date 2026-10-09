@@ -232,6 +232,7 @@ class Media extends Component {
 
     this.routeViewed = false;
     this.menuAnchors = {};
+    this.copyRequest = 0;
   }
 
   handleMuteToggle() {
@@ -253,6 +254,7 @@ class Media extends Component {
   componentDidUpdate(prevProps, prevState) {
     const { windowWidth, inView, routePreserved } = this.state;
     const { dialog, currentRoute } = this.props;
+    if (prevProps.location !== this.props.location) this.copyRequest += 1;
     const routeChanged = prevProps.currentRoute?.fullname !== currentRoute?.fullname;
     const menuChanged = prevProps.dialog !== dialog;
     const showMapAlways = windowWidth >= 1536;
@@ -322,13 +324,17 @@ class Media extends Component {
   }
 
   async copySegmentName() {
-    const { currentRoute } = this.props;
+    const { currentRoute, location } = this.props;
     if (!currentRoute || !navigator.clipboard) {
       return;
     }
 
+    this.copyRequest += 1;
+    const request = this.copyRequest;
     await navigator.clipboard.writeText(`${currentRoute.fullname.replace('|', '/')}/${getSegmentNumber(currentRoute)}`);
-    if (this.props.dialog === 'route-info') this.props.dispatch(closeDialog());
+    if (this.mounted && request === this.copyRequest && this.props.location === location && this.props.dialog === 'route-info') {
+      this.props.dispatch(closeDialog());
+    }
   }
 
   openInUseradmin() {
@@ -942,6 +948,7 @@ const stateToProps = (state) => ({
   isBufferingVideo: state.isBufferingVideo,
   dialog: state.navigation.dialog,
   dialogClip: state.navigation.dialogClip,
+  location: state.router.location,
 });
 
 export default connect(stateToProps)(withStyles(styles)(Media));

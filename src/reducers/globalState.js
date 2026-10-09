@@ -1,6 +1,15 @@
 import * as Types from '../actions/types';
 import { emptyDevice } from '../utils';
+import { createDeviceState } from '../initialState';
 import { reconcileRouteList, resolveSelectedRoute } from './navigation';
+
+function updateDeviceState(state, dongleId, update) {
+  if (dongleId === state.dongleId) return update(state);
+  const previous = state.deviceCache[dongleId] || createDeviceState();
+  const next = update(previous);
+  if (next === previous) return state;
+  return { ...state, deviceCache: { ...state.deviceCache, [dongleId]: next } };
+}
 
 function updateRoute(state, fullname, fields) {
   const previous = Object.hasOwn(state.routeCache, fullname)
@@ -230,42 +239,34 @@ export default function reducer(_state, action) {
       };
       break;
     case Types.ACTION_FILES_URLS:
-      state.files = {
-        ...(state.files !== null ? { ...state.files } : {}),
-        ...action.urls,
-      };
-      break;
     case Types.ACTION_FILES_UPDATE:
-      state.files = {
-        ...(state.files !== null ? { ...state.files } : {}),
-        ...action.files,
-      };
+      state = updateDeviceState(state, action.dongleId, (device) => ({
+        ...device,
+        files: { ...device.files, ...(action.urls || action.files) },
+      }));
       break;
     case Types.ACTION_FILES_UPLOADING:
-      state.filesUploading = action.uploading;
-      state.filesUploadingMeta = {
-        dongleId: action.dongleId,
-        fetchedAt: Date.now(),
-      };
-      if (Object.keys(action.files).length) {
-        state.files = {
-          ...(state.files !== null ? { ...state.files } : {}),
-          ...action.files,
-        };
-      }
+      state = updateDeviceState(state, action.dongleId, (device) => ({
+        ...device,
+        filesUploading: action.uploading,
+        filesUploadingMeta: { dongleId: action.dongleId, fetchedAt: Date.now() },
+        files: Object.keys(action.files).length ? { ...device.files, ...action.files } : device.files,
+      }));
       break;
     case Types.ACTION_FILES_CANCELLED_UPLOADS:
-      if (state.files) {
-        const cancelFileNames = Object.keys(state.filesUploading)
+      state = updateDeviceState(state, action.dongleId, (device) => {
+        const cancelFileNames = Object.keys(device.filesUploading)
           .filter((id) => action.ids.includes(id))
-          .map((id) => state.filesUploading[id].fileName);
-        state.files = Object.keys(state.files)
-          .filter((fileName) => !cancelFileNames.includes(fileName))
-          .reduce((obj, fileName) => { obj[fileName] = state.files[fileName]; return obj; }, {});
-      }
-      state.filesUploading = Object.keys(state.filesUploading)
-        .filter((id) => !action.ids.includes(id))
-        .reduce((obj, id) => { obj[id] = state.filesUploading[id]; return obj; }, {});
+          .map((id) => device.filesUploading[id].fileName);
+        if (!cancelFileNames.length) return device;
+        return {
+          ...device,
+          files: device.files && Object.fromEntries(Object.entries(device.files)
+            .filter(([fileName]) => !cancelFileNames.includes(fileName))),
+          filesUploading: Object.fromEntries(Object.entries(device.filesUploading)
+            .filter(([id]) => !action.ids.includes(id))),
+        };
+      });
       break;
     case Types.ACTION_ROUTE_LOAD_STATUS:
       state.routeLoadStatus = { ...state.routeLoadStatus };

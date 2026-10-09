@@ -90,7 +90,7 @@ async function mockFetch(input, init = {}) {
   const deviceList = options.devices ?? devices;
   if (url.pathname === '/v1/me/turn') return json(null);
   if (url.pathname === '/v1/me/') return json({ id: 'test-user', superuser: false });
-  if (url.pathname === '/v1/me/devices/') return json(deviceList);
+  if (url.pathname === '/v1/me/devices/') return options.devicesResponse || json(deviceList);
   if (url.pathname === '/v1/referrals') return json(options.referrals ?? {
     code: 'ABC1234',
     cash: { available: 50, claimed: 50, pending: 50 },
@@ -485,8 +485,23 @@ describe('whole-app behavior', () => {
       devices: devices.map((device) => ({ ...device, is_owner: device.dongle_id === FIRST })),
     });
     expect(await screen.findByText('No access to this device.')).toBeVisible();
+    expect(screen.getByRole('dialog', { name: 'Device unavailable' })).toBeVisible();
     expect(screen.queryByLabelText('Device name')).not.toBeInTheDocument();
     expect(screen.queryByText('Upload queue')).not.toBeInTheDocument();
+  });
+
+  test('a cold settings link names its pending device dialog before device data arrives', async () => {
+    let resolveDevices;
+    const devicesResponse = new Promise(resolve => { resolveDevices = resolve; });
+    const { history } = await renderApp(`/${FIRST}/${LOG}?dialog=settings&device=${SECOND}`, { devicesResponse });
+    const dialog = screen.getByRole('dialog', { name: 'Loading device' });
+    expect(within(dialog).getByRole('progressbar', { name: 'Loading device' })).toBeVisible();
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeEnabled();
+    await act(async () => resolveDevices(await json(devices)));
+    expect(await screen.findByRole('dialog', { name: 'Device settings' })).toBeVisible();
+    expect(screen.getByLabelText('Device name')).toHaveValue('Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(history.location.search).toBe('');
   });
 
   test('opening pairing mounts exactly one scanner even when both entry buttons are present', async () => {
@@ -586,6 +601,44 @@ describe('whole-app behavior', () => {
     await waitFor(() => expect(mocks.requests.some(({ url }) => (
       decodeURIComponent(url).includes(`${FIRST}|${RECENT_LOG}/files`)
     ))).toBe(true));
+  });
+
+  test.each(['unchanged', 'another dialog', 'unmounted', 'A to B to A'])('route-info clipboard completion is scoped to its opening visit: %s', async (navigation) => {
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    let completeCopy;
+    const writeText = vi.fn(() => new Promise(resolve => { completeCopy = resolve; }));
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      const pathname = `/${FIRST}/${LOG}`;
+      const destination = `${pathname}?x=1&dialog=route-info#video`;
+      const { history, store } = await renderApp(destination);
+      fireEvent.click(await screen.findByText(`${FIRST}/${LOG}/0`));
+      expect(writeText).toHaveBeenCalledExactlyOnceWith(`${FIRST}/${LOG}/0`);
+
+      if (navigation === 'another dialog') {
+        act(() => history.push(`${pathname}?dialog=settings`));
+        await screen.findByRole('dialog', { name: 'Device settings' });
+      } else if (navigation === 'unmounted') {
+        act(() => history.push(`/${FIRST}?dialog=settings`));
+        await screen.findByRole('dialog', { name: 'Device settings' });
+      } else if (navigation === 'A to B to A') {
+        act(() => store.dispatch({ type: 'ACTION_ROUTES_METADATA', dongleId: FIRST, routeId: RECENT_LOG,
+          routes: [{ ...makeRoute(FIRST), log_id: RECENT_LOG, duration: 60000 }] }));
+        act(() => history.push(`/${FIRST}/${RECENT_LOG}?dialog=route-info`));
+        await screen.findByText(`${FIRST}/${RECENT_LOG}/0`);
+        act(() => history.goBack());
+        await screen.findByText(`${FIRST}/${LOG}/0`);
+      }
+
+      const beforeCompletion = history.location;
+      await act(async () => completeCopy());
+      const unchanged = navigation === 'unchanged';
+      expect(history.location).toMatchObject(unchanged ? { pathname, search: '?x=1', hash: '#video' } : beforeCompletion);
+      expect(history.location === beforeCompletion).toBe(!unchanged);
+    } finally {
+      if (previousClipboard) Object.defineProperty(navigator, 'clipboard', previousClipboard);
+      else delete navigator.clipboard;
+    }
   });
 
   test('leaving pairing stops a camera stream acquired after the dialog closed', async () => {

@@ -297,9 +297,15 @@ class UploadQueue extends Component {
   }
 }
 
-const stateToProps = (state) => ({
-  filesUploading: state.filesUploading,
-  filesUploadingMeta: state.filesUploadingMeta,
-});
+const emptyUploads = {};
+const emptyUploadsMeta = { dongleId: null, fetchedAt: null };
+
+const stateToProps = (state, { device }) => {
+  const deviceState = state.dongleId === device.dongle_id ? state : state.deviceCache[device.dongle_id];
+  return {
+    filesUploading: deviceState?.filesUploading || emptyUploads,
+    filesUploadingMeta: deviceState?.filesUploadingMeta || emptyUploadsMeta,
+  };
+};
 
 export default connect(stateToProps)(withStyles(styles)(UploadQueue));
