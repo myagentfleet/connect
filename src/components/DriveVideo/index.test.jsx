@@ -90,6 +90,26 @@ async function prefetchFailure(loopEnd = 180000) {
   return { ...view, stream };
 }
 
+test.each([
+  ['native', null, 0],
+  ['native', { startTime: 20000, duration: 40000 }, 18],
+  ['MSE', null, 0],
+  ['MSE', { startTime: 20000, duration: 40000 }, 18],
+])('starts %s at the reset position before metadata (loop: %j)', async (transport, loop, position) => {
+  if (transport === 'MSE') HTMLMediaElement.prototype.canPlayType.mockReturnValue('');
+  const { video, store } = mountVideo({ currentRoute: { ...route, duration: 180000 }, offset: 125000, loop });
+  let initialPosition = video.currentTime;
+  if (transport === 'MSE') {
+    await finishImport();
+    const stream = mocks.streams[0];
+    act(() => stream.emit(Hls.Events.MANIFEST_PARSED));
+    initialPosition = stream.startLoad.mock.calls[0]?.[0];
+  }
+  expect(initialPosition).toBe(position);
+  expect(video.readyState).toBe(0);
+  expect(store.getState().offset).toBe(loop?.startTime ?? 0);
+});
+
 test('the media clock drives progress without feedback seeks or rate corrections', () => {
   const { video, store } = mountVideo();
   ready(video);
