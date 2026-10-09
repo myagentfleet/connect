@@ -209,6 +209,13 @@ class DriveVideo extends Component {
 
   onVideoResume() {
     const { videoError } = this.state;
+    const videoPlayer = this.videoPlayer.current;
+    const video = videoPlayer?.getInternalPlayer();
+    if (this.props.isBufferingVideo && video && !video.seeking && video.readyState >= 4
+      && getVideoState(videoPlayer).hasLoaded) {
+      // Restart the clock as soon as playback is ready, before the next sync tick.
+      this.props.dispatch(bufferVideo(false));
+    }
     if (videoError) this.setState({ videoError: null });
   }
 
@@ -345,6 +352,7 @@ class DriveVideo extends Component {
           onBuffer={this.onVideoBuffering}
           onBufferEnd={this.onVideoResume}
           onPlay={this.onVideoResume}
+          onSeek={this.onVideoResume}
           onError={this.onVideoError}
         />
       </div>
