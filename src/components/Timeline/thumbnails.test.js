@@ -53,6 +53,29 @@ describe('timeline thumbnails', () => {
     });
   });
 
+  it('uses frames within each minute and groups only consecutive frames from the same sprite', () => {
+    const offsets = [0, 5000, 55000, 59999, 60000, 65000, 125000, 3595000];
+    percentToOffsetMock.mockImplementation((percent) => offsets[Math.floor(percent * offsets.length)]);
+    render(React.createElement(Thumbnails, {
+      thumbnail: { width: offsets.length * 160, height: 100 },
+      percentToOffset: percentToOffsetMock,
+      currentRoute: { ...mockRoute, url: 'https://routes.example.com/drive' },
+    }));
+
+    const expected = [
+      [0, 0, 320], [0, 11, 160], [0, 11, 160],
+      [1, 0, 320], [2, 1, 160], [59, 11, 160],
+    ];
+    const images = screen.getAllByRole('img');
+    expect(percentToOffsetMock).toHaveBeenCalledTimes(offsets.length);
+    expect(images).toHaveLength(expected.length);
+    expected.forEach(([segment, frame, width], index) => {
+      expect(images[index].style.backgroundImage).toContain(`/drive/${segment}/sprite.jpg`);
+      expect(Number.parseFloat(images[index].style.backgroundPositionX)).toBeCloseTo(-frame * 160);
+      expect(images[index].style.width).toBe(`${width}px`);
+    });
+  });
+
   it('doesn\'t render before bounds are set', () => {
     render(React.createElement(Thumbnails, {
       thumbnail: {
