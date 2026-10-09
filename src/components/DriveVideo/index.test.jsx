@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { createStore } from 'redux';
 
@@ -8,23 +8,25 @@ import { currentOffset } from '../../timeline';
 import { bufferVideo, play, reducer as playbackReducer, seek } from '../../timeline/playback';
 import { ACTION_BUFFER_VIDEO } from '../../actions/types';
 
-const player = vi.hoisted(() => ({ store: null, props: null, media: null, handle: null }));
+const player = vi.hoisted(() => ({ store: null, props: null, media: null, handle: null, renders: 0 }));
 vi.mock('../../store', () => ({ default: { getState: () => player.store.getState() } }));
 vi.mock('../../api/backend', () => ({ api: { video: {
-  getQcameraStreamUrl: () => 'https://video.example/route.m3u8',
+  getQcameraStreamUrl: (route) => `https://video.example/${route}.m3u8`,
 } } }));
 vi.mock('../../utils/browser.js', () => ({ isIos: () => false, isFirefox: () => false }));
 vi.mock('react-player/file', () => ({ default: React.forwardRef((props, ref) => {
   player.props = props;
+  player.renders += 1;
   React.useImperativeHandle(ref, () => player.handle, []);
   React.useLayoutEffect(() => {
     if (props.playing && player.media.paused) player.media.play();
     if (!props.playing && !player.media.paused) player.media.pause();
   }, [props.playing]);
-  return <div data-testid="drive-player" />;
+  return <video data-testid="drive-player" {...props.config.file?.attributes} />;
 }) }));
 
 function renderVideo() {
+  player.renders = 0;
   const route = { fullname: 'aaaaaaaaaaaaaaaa|2026-08-06--12-00-00', videoStartOffset: 0 };
   const initial = {
     dongleId: 'aaaaaaaaaaaaaaaa', currentRoute: route, routes: [route],
@@ -33,6 +35,7 @@ function renderVideo() {
   };
   player.media = {
     currentTime: 4, readyState: 4, seeking: false, paused: true, playbackRate: 1,
+    videoWidth: 0, videoHeight: 0,
     buffered: { length: 1, start: () => 0, end: () => 8 },
     play: vi.fn(() => {
       player.media.paused = false;
@@ -41,20 +44,23 @@ function renderVideo() {
     }),
     pause: vi.fn(() => { player.media.paused = true; }),
   };
+  const hls = { on: vi.fn() };
   player.handle = {
     getDuration: () => 8,
     getCurrentTime: () => player.media.currentTime,
-    getInternalPlayer: (kind) => kind === 'hls' ? {} : player.media,
+    getInternalPlayer: (kind) => kind === 'hls' ? hls : player.media,
     seekTo: vi.fn((seconds) => {
       player.media.currentTime = seconds;
       player.media.seeking = true;
       player.media.readyState = 1;
     }),
   };
-  player.store = createStore((state = initial, action) => playbackReducer(state, action));
+  player.store = createStore((state = initial, action) => action.type === 'test/select-route'
+    ? { ...state, currentRoute: action.route }
+    : playbackReducer(state, action));
   const dispatch = vi.spyOn(player.store, 'dispatch');
-  render(<Provider store={player.store}><DriveVideo isMuted /></Provider>);
-  return { store: player.store, dispatch };
+  const view = render(<Provider store={player.store}><DriveVideo isMuted /></Provider>);
+  return { store: player.store, dispatch, ...view };
 }
 
 function seekToOneSecond() {
@@ -162,4 +168,81 @@ test('resuming ready video still clears an earlier video error', () => {
   expect(screen.getByText('Unable to load video')).toBeInTheDocument();
   act(() => player.props.onBufferEnd());
   expect(screen.queryByText('Unable to load video')).not.toBeInTheDocument();
+});
+
+test('the loading frame uses the qcamera ratio and contains video without a fixed minimum height', () => {
+  renderVideo();
+  const video = screen.getByTestId('drive-player');
+  expect(video.closest('.DriveVideo')).toHaveStyle({ aspectRatio: String(526 / 330) });
+  expect(video.closest('.DriveVideo').className).not.toContain('min-h');
+  expect(video).toHaveStyle({ width: '100%', height: '100%', objectFit: 'contain' });
+});
+
+test.each([[526, 330], [320, 180]])('native metadata sizes the frame to %i×%i without replacing the player', (width, height) => {
+  const { store } = renderVideo();
+  const video = screen.getByTestId('drive-player');
+  const state = store.getState();
+  const handle = player.handle;
+  Object.assign(player.media, { videoWidth: width, videoHeight: height });
+  fireEvent.loadedMetadata(video);
+  expect(video.closest('.DriveVideo')).toHaveStyle({ aspectRatio: String(width / height) });
+  expect(screen.getByTestId('drive-player')).toBe(video);
+  expect(player.handle).toBe(handle);
+  expect(store.getState()).toBe(state);
+  expect(player.media.play).not.toHaveBeenCalled();
+  expect(player.media.pause).not.toHaveBeenCalled();
+});
+
+test('native resize updates the same frame and repeated dimensions do not rerender it', () => {
+  renderVideo();
+  const video = screen.getByTestId('drive-player');
+  Object.assign(player.media, { videoWidth: 526, videoHeight: 330 });
+  fireEvent.loadedMetadata(video);
+  Object.assign(player.media, { videoWidth: 320, videoHeight: 180 });
+  fireEvent.resize(video);
+  expect(video.closest('.DriveVideo')).toHaveStyle({ aspectRatio: String(320 / 180) });
+  const renders = player.renders;
+  fireEvent.resize(video);
+  fireEvent.loadedMetadata(video);
+  expect(player.renders).toBe(renders);
+  expect(screen.getByTestId('drive-player')).toBe(video);
+});
+
+test.each([[0, 180], [320, 0], [-320, 180], [Infinity, 180], [320, Infinity], [NaN, 180]])(
+  'invalid native dimensions %s×%s retain the last valid ratio', (width, height) => {
+    renderVideo();
+    const video = screen.getByTestId('drive-player');
+    Object.assign(player.media, { videoWidth: 320, videoHeight: 180 });
+    fireEvent.loadedMetadata(video);
+    const renders = player.renders;
+    Object.assign(player.media, { videoWidth: width, videoHeight: height });
+    fireEvent.resize(video);
+    expect(video.closest('.DriveVideo')).toHaveStyle({ aspectRatio: String(320 / 180) });
+    expect(player.renders).toBe(renders);
+  },
+);
+
+test('player readiness recovers dimensions if metadata arrived before the handler', () => {
+  renderVideo();
+  Object.assign(player.media, { videoWidth: 320, videoHeight: 180 });
+  act(() => player.props.onReady(player.handle));
+  expect(screen.getByTestId('drive-player').closest('.DriveVideo'))
+    .toHaveStyle({ aspectRatio: String(320 / 180) });
+});
+
+test('unrelated renders preserve dimensions while a changed or cleared route resets the loading ratio', () => {
+  const { store, rerender } = renderVideo();
+  const video = screen.getByTestId('drive-player');
+  Object.assign(player.media, { videoWidth: 320, videoHeight: 180 });
+  fireEvent.loadedMetadata(video);
+  rerender(<Provider store={store}><DriveVideo isMuted={false} /></Provider>);
+  expect(video.closest('.DriveVideo')).toHaveStyle({ aspectRatio: String(320 / 180) });
+  act(() => store.dispatch({ type: 'test/select-route', route: { fullname: 'bbbbbbbbbbbbbbbb|2026-08-06--12-00-00' } }));
+  expect(video.closest('.DriveVideo')).toHaveStyle({ aspectRatio: String(526 / 330) });
+  expect(screen.getByTestId('drive-player')).toBe(video);
+  fireEvent.loadedMetadata(video);
+  expect(video.closest('.DriveVideo')).toHaveStyle({ aspectRatio: String(320 / 180) });
+  act(() => store.dispatch({ type: 'test/select-route', route: null }));
+  fireEvent.resize(video);
+  expect(video.closest('.DriveVideo')).toHaveStyle({ aspectRatio: String(526 / 330) });
 });

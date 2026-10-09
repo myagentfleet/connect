@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { resetCaptureScroll, verifyPlaybackControls } from '../scripts/gallery-checks.mjs';
 
 const { values } = parseArgs({ options: {
   origin: { type: 'string', default: 'http://127.0.0.1:8080' },
@@ -14,7 +15,7 @@ const { values } = parseArgs({ options: {
 const origin = new URL(values.origin).origin;
 assert(['127.0.0.1', 'localhost', '[::1]'].includes(new URL(origin).hostname), 'Use a loopback app origin');
 const output = resolve(values.output);
-const fixtureDirectory = resolve(dirname(fileURLToPath(import.meta.url)), 'drive-hls-fixture');
+const toolingDirectory = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(resolve('package.json'));
 const DONGLE = 'aaaaaaaaaaaaaaaa';
 const LOG = '2026-08-06--12-00-00';
@@ -31,6 +32,19 @@ const report = {
   passed: false,
   cases: [],
 };
+
+async function loadFixture(directory, sdk) {
+  const fixtureDirectory = resolve(toolingDirectory, directory);
+  const metadata = JSON.parse(await readFile(resolve(fixtureDirectory, 'validation.json'), 'utf8'));
+  const assets = new Map(await Promise.all(Object.entries(metadata.files).map(async ([name, expected]) => {
+    const bytes = await readFile(resolve(fixtureDirectory, name));
+    assert.equal(bytes.length, expected.bytes, `${directory}/${name} size changed`);
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), expected.sha256, `${directory}/${name} checksum changed`);
+    return [name, bytes];
+  })));
+  assets.set('sdk', sdk);
+  return { metadata, assets };
+}
 
 function fixtureData() {
   const now = Math.floor(Date.now() / 1000);
@@ -74,7 +88,7 @@ async function intercept(request, data, assets, result) {
     }
     if (path === '/__hls-route/0/events.json' || path === '/__hls-route/0/coords.json') return json([]);
     if (path === '/__hls-route/0/sprite.jpg') {
-      return respond(request, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=', 'base64'), 'image/png');
+      return respond(request, assets.get('sprite.jpg'), 'image/jpeg');
     }
     return request.continue();
   }
@@ -235,6 +249,10 @@ async function verifyPlayingNavigation(page, result) {
   await page.click('button[aria-label="Pause"]');
   await page.waitForFunction((selector) => document.querySelector(selector)?.paused, WAIT, VIDEO);
   await seekTimeline(page, 4);
+  await verifyCaptureReady(page, result);
+}
+
+async function verifyCaptureReady(page, result) {
   // Native seeking can finish before DriveVideo's next buffering-state update.
   await page.waitForSelector('.DriveView [role="progressbar"]', { hidden: true, timeout: WAIT.timeout });
   await page.waitForFunction((selector) => {
@@ -246,8 +264,50 @@ async function verifyPlayingNavigation(page, result) {
   assert.equal(result.finalCapture.error, null);
 }
 
-async function runCase(browser, assets, name, viewport) {
-  const result = { name, viewport, passed: false, phase: 'setup', sdkRequests: 0, manifestRequests: 0,
+async function verifySpeedSelection(page, result) {
+  result.phase = 'paused fractional speed selection';
+  await verifyCaptureReady(page, result);
+  const reference = await mediaState(page);
+  const selector = 'select[aria-label="Playback speed"]';
+  await page.focus(selector);
+  await page.keyboard.press('Home');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Tab');
+  await page.waitForFunction((target) => document.querySelector(target)?.value === '0.25', WAIT, selector);
+  const paused = await retainedPlayback(page, reference);
+  const size = await page.$eval(selector, (select) => {
+    const probe = select.cloneNode(true);
+    probe.setAttribute('aria-hidden', 'true');
+    Object.assign(probe.style, { position: 'absolute', visibility: 'hidden', width: 'auto',
+      minWidth: '0', maxWidth: 'none', font: getComputedStyle(select).font });
+    document.body.append(probe);
+    const intrinsicWidth = probe.getBoundingClientRect().width;
+    probe.remove();
+    return { text: select.selectedOptions[0].textContent, width: select.getBoundingClientRect().width,
+      height: select.getBoundingClientRect().height, intrinsicWidth,
+      fits: select.getBoundingClientRect().width + 1 >= intrinsicWidth };
+  });
+  result.speedSelection = { selectedRate: 0.25, paused, size };
+  assert(size.fits, `Native speed label is clipped: ${JSON.stringify(size)}`);
+  await resetCaptureScroll(page);
+  const screenshot = `${result.name}-fractional-speed.png`;
+  await page.screenshot({ path: resolve(output, screenshot), fullPage: true });
+  result.speedSelection.screenshot = screenshot;
+  await page.focus(selector);
+  await page.keyboard.press('Home');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Tab');
+  await page.waitForFunction((target) => document.querySelector(target)?.value === '1', WAIT, selector);
+  result.speedSelection.restoredRate = 1;
+  result.speedSelection.restored = await retainedPlayback(page, reference);
+}
+
+async function runCase(browser, fixture, name, viewport, historyChecks = true) {
+  const { assets, metadata } = fixture;
+  const result = { name, viewport, checks: historyChecks ? 'decode, seek, fractional speed, paused/playing history and layout' : 'decode, seek, fractional speed and layout',
+    intrinsicSize: [metadata.width, metadata.height], passed: false, phase: 'setup', sdkRequests: 0, manifestRequests: 0,
     segments: [], backendRequests: [], athenaMethods: [], blockedExternal: [], pageErrors: [], requestErrors: [], consoleErrors: [] };
   report.cases.push(result);
   let context;
@@ -269,15 +329,15 @@ async function runCase(browser, assets, name, viewport) {
     });
     result.phase = 'cold-link decode';
     await page.goto(`${origin}${DRIVE_PATH}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
-    await page.waitForFunction((selector) => {
+    await page.waitForFunction((selector, width, height) => {
       const video = document.querySelector(selector);
-      return video && video.readyState >= 2 && video.videoWidth === 320 && video.currentTime >= 0.3
+      return video && video.readyState >= 2 && video.videoWidth === width && video.videoHeight === height && video.currentTime >= 0.3
         && video.currentTime < 7 && video.getVideoPlaybackQuality().totalVideoFrames >= 3;
-    }, WAIT, VIDEO);
+    }, WAIT, VIDEO, metadata.width, metadata.height);
     await page.$eval(VIDEO, (video) => { window.__hlsValidationVideo = video; });
     result.initial = await mediaState(page);
     assert.equal(result.initial.hlsVersion, '1.4.8');
-    assert.equal(result.initial.height, 180);
+    assert.equal(result.initial.height, metadata.height);
     assert.equal(result.initial.error, null);
     assert(result.initial.currentSrc.startsWith('blob:'), 'HLS must attach an actual MediaSource');
     assert(Math.abs(result.initial.duration - 8) < 0.1, 'Unexpected HLS duration');
@@ -292,19 +352,27 @@ async function runCase(browser, assets, name, viewport) {
     result.phase = 'timeline seek';
     await seekTimeline(page, 4);
     result.seek = await mediaState(page);
-    result.phase = 'open URL dialog';
-    await navigateInfo(page, 'open');
-    result.dialog = await retainedPlayback(page, result.seek);
-    result.phase = 'Back';
-    await navigateInfo(page, 'back');
-    result.back = await retainedPlayback(page, result.seek);
-    result.phase = 'Forward';
-    await navigateInfo(page, 'forward');
-    result.forward = await retainedPlayback(page, result.seek);
-    result.phase = 'Close';
-    await navigateInfo(page, 'close');
-    result.closed = await retainedPlayback(page, result.seek);
-    await verifyPlayingNavigation(page, result);
+    await verifySpeedSelection(page, result);
+    if (historyChecks) {
+      result.phase = 'open URL dialog';
+      await navigateInfo(page, 'open');
+      result.dialog = await retainedPlayback(page, result.seek);
+      result.phase = 'Back';
+      await navigateInfo(page, 'back');
+      result.back = await retainedPlayback(page, result.seek);
+      result.phase = 'Forward';
+      await navigateInfo(page, 'forward');
+      result.forward = await retainedPlayback(page, result.seek);
+      result.phase = 'Close';
+      await navigateInfo(page, 'close');
+      result.closed = await retainedPlayback(page, result.seek);
+      await verifyPlayingNavigation(page, result);
+    } else {
+      await verifyCaptureReady(page, result);
+    }
+    result.phase = 'rendered geometry';
+    result.geometry = await verifyPlaybackControls(page, name);
+    assert(result.geometry.layout.decodedAspect?.matches, 'Decoded-video aspect was not verified');
     assert.equal(new URL(page.url()).pathname, DRIVE_PATH);
     assert.equal(result.sdkRequests, 1, 'Dialog changes reloaded the HLS SDK');
     assert.equal(result.manifestRequests, 1, 'Dialog changes restarted the HLS source');
@@ -325,6 +393,8 @@ async function runCase(browser, assets, name, viewport) {
     if (page) {
       const screenshot = `${name}${result.passed ? '' : '-failure'}.png`;
       try {
+        await resetCaptureScroll(page);
+        result.captureScroll = await page.evaluate(() => ({ x: scrollX, y: scrollY }));
         await page.screenshot({ path: resolve(output, screenshot), fullPage: true });
         result.screenshot = screenshot;
       } catch (error) {
@@ -350,11 +420,13 @@ function escapeHtml(value) {
 async function writeReport() {
   report.finishedAt = new Date().toISOString();
   await writeFile(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
-  const images = await Promise.all(report.cases.map(async (result) => {
-    if (!result.screenshot) return '';
-    const png = await readFile(resolve(output, result.screenshot));
-    return `<section><h2>${escapeHtml(result.name)} — ${result.passed ? 'PASS' : 'FAIL'} (${escapeHtml(result.phase)})</h2><img alt="${escapeHtml(result.name)} captured app" src="data:image/png;base64,${png.toString('base64')}"></section>`;
-  }));
+  const images = await Promise.all(report.cases.flatMap((result) => [
+    { path: result.speedSelection?.screenshot, label: 'Paused at .25×' },
+    { path: result.screenshot, label: `Final capture: ${result.phase}` },
+  ].filter((capture) => capture.path).map(async (capture) => {
+    const png = await readFile(resolve(output, capture.path));
+    return `<section><h2>${escapeHtml(result.name)} — ${result.passed ? 'PASS' : 'FAIL'} — ${escapeHtml(capture.label)}</h2><p>${escapeHtml(result.checks)}</p><img alt="${escapeHtml(result.name)} ${escapeHtml(capture.label)}" src="data:image/png;base64,${png.toString('base64')}"></section>`;
+  })));
   await writeFile(resolve(output, 'report.html'), `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Actual HLS drive verification</title><style>body{font:16px system-ui;background:#17222b;color:#eee;margin:24px}img{display:block;max-width:100%;height:auto;border:1px solid #58636b}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d151b;padding:16px}section{margin:24px 0}h1,h2{line-height:1.2}</style><h1>Actual HLS drive verification: ${report.passed ? 'PASS' : 'FAIL'}</h1><p>${escapeHtml(report.scope)}</p><p>Source: ${escapeHtml(report.sourceSha || 'not supplied')}</p><p>${escapeHtml(report.limitations)}</p>${images.join('')}<h2>Recorded evidence</h2><pre>${escapeHtml(JSON.stringify(report, null, 2))}</pre></html>\n`);
 }
 
@@ -366,23 +438,25 @@ try {
     return [name, metadata.version];
   })));
   assert.deepEqual(report.versions, { puppeteer: '24.16.0', 'hls.js': '1.4.8' });
-  report.fixture = JSON.parse(await readFile(resolve(fixtureDirectory, 'validation.json'), 'utf8'));
-  const assets = new Map(await Promise.all(Object.entries(report.fixture.files).map(async ([name, expected]) => {
-    const bytes = await readFile(resolve(fixtureDirectory, name));
-    assert.equal(bytes.length, expected.bytes, `${name} size changed`);
-    assert.equal(createHash('sha256').update(bytes).digest('hex'), expected.sha256, `${name} checksum changed`);
-    return [name, bytes];
-  })));
-  assets.set('sdk', await readFile(require.resolve('hls.js')));
-  report.sdkSha256 = createHash('sha256').update(assets.get('sdk')).digest('hex');
+  const sdk = await readFile(require.resolve('hls.js'));
+  report.sdkSha256 = createHash('sha256').update(sdk).digest('hex');
+  const [widescreen, cameraAspect] = await Promise.all([
+    loadFixture('drive-hls-fixture', sdk),
+    loadFixture('drive-hls-native-fixture', sdk),
+  ]);
+  report.fixtures = { widescreen: widescreen.metadata, cameraAspect: cameraAspect.metadata };
   const puppeteer = require('puppeteer');
   browser = await puppeteer.launch({ headless: true, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome',
     args: ['--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required'],
   });
   report.browserVersion = await browser.version();
-  await runCase(browser, assets, 'desktop', { width: 1280, height: 900, deviceScaleFactor: 1 });
-  await runCase(browser, assets, 'mobile', { width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
-  report.passed = report.cases.length === 2 && report.cases.every((result) => result.passed);
+  await runCase(browser, widescreen, 'desktop', { width: 1280, height: 900, deviceScaleFactor: 1 });
+  await runCase(browser, widescreen, 'mobile', { width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
+  await runCase(browser, cameraAspect, 'camera-desktop', { width: 1280, height: 900, deviceScaleFactor: 1 }, false);
+  await runCase(browser, cameraAspect, 'camera-mobile', { width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true }, false);
+  await runCase(browser, cameraAspect, 'camera-narrow', { width: 320, height: 700, deviceScaleFactor: 1, isMobile: true, hasTouch: true }, false);
+  await runCase(browser, cameraAspect, 'camera-wide', { width: 1536, height: 960, deviceScaleFactor: 1 }, false);
+  report.passed = report.cases.length === 6 && report.cases.every((result) => result.passed);
 } catch (error) {
   report.error = String(error.stack || error);
   console.error(report.error);

@@ -1,0 +1,50 @@
+{
+  "source": "Synthetic FFmpeg test pattern at 526 x 330 pixels; no device footage",
+  "generator": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+  "generation": "ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=526x330:rate=12:duration=8 -map_metadata -1 -an -c:v libx264 -threads 1 -profile:v baseline -level 3.0 -pix_fmt yuv420p -crf 32 -preset veryslow -fflags +bitexact -flags:v +bitexact -g 24 -keyint_min 24 -sc_threshold 0 -f hls -hls_time 2 -hls_list_size 0 -hls_playlist_type vod -hls_flags independent_segments -hls_segment_filename tooling/drive-hls-native-fixture/segment-%02d.ts -y tooling/drive-hls-native-fixture/playlist.m3u8",
+  "durationSeconds": 8,
+  "decodedFrames": 96,
+  "codec": "h264",
+  "profile": "Constrained Baseline",
+  "pixelFormat": "yuv420p",
+  "width": 526,
+  "height": 330,
+  "frameRate": "12/1",
+  "segmentCount": 4,
+  "files": {
+    "playlist.m3u8": {
+      "bytes": 269,
+      "sha256": "019e10607abd342755e1f9e3434bdda8152c65d8a26263780e985a3feac42d0b"
+    },
+    "segment-00.ts": {
+      "bytes": 40232,
+      "sha256": "24283f92c0e6bf0c08a28b66a4bb4f07266e157da88fa4845a6ed5fdc31426e0"
+    },
+    "segment-01.ts": {
+      "bytes": 45308,
+      "sha256": "2def9726f413a979d9bddd002a565b22ceb810f0c80806a9d70aad6985480534"
+    },
+    "segment-02.ts": {
+      "bytes": 43052,
+      "sha256": "28a09658d5a728dff887e06beb1c575748331f8b54dcf0c02f5f1674e878de72"
+    },
+    "segment-03.ts": {
+      "bytes": 44180,
+      "sha256": "e0b5eb85b3770271ff0822b8c1a25bc49bc22edf4e2184b7d1fa7c0483e56ad4"
+    },
+    "sprite.jpg": {
+      "bytes": 37404,
+      "sha256": "48237cf5a9fdbfce299a1d2f046e6e5ddb9ddabe77a14934690dea9d261225bd"
+    }
+  },
+  "sprite": {
+    "width": 1536,
+    "height": 80,
+    "columns": 12,
+    "cellWidth": 128,
+    "cellHeight": 80,
+    "source": "playlist.m3u8",
+    "scaling": "Fit each frame within128x80 and pad; preserve image aspect ratio",
+    "generation": "ffmpeg -hide_banner -loglevel error -i tooling/drive-hls-native-fixture/playlist.m3u8 -map_metadata -1 -vf 'fps=3/2,scale=128:80:force_original_aspect_ratio=decrease,pad=128:80:(ow-iw)/2:(oh-ih)/2:black,tile=12x1' -frames:v 1 -q:v 2 -y tooling/drive-hls-native-fixture/sprite.jpg"
+  }
+}

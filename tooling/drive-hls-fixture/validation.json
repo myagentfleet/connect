@@ -32,6 +32,20 @@
     "segment-03.ts": {
       "bytes": 20492,
       "sha256": "48e728f259f1c73f77a5e6aad8abbb6aca7d5c08c9d84340126d717a05310fa3"
+    },
+    "sprite.jpg": {
+      "bytes": 46119,
+      "sha256": "ee43f79cf339426ce2df69e412651bdabc9796a54927d2f19fdd713022133d93"
     }
+  },
+  "sprite": {
+    "width": 1536,
+    "height": 80,
+    "columns": 12,
+    "cellWidth": 128,
+    "cellHeight": 80,
+    "source": "playlist.m3u8",
+    "scaling": "Fit each frame within128x80 and pad; preserve image aspect ratio",
+    "generation": "ffmpeg -hide_banner -loglevel error -i tooling/drive-hls-fixture/playlist.m3u8 -map_metadata -1 -vf 'fps=3/2,scale=128:80:force_original_aspect_ratio=decrease,pad=128:80:(ow-iw)/2:(oh-ih)/2:black,tile=12x1' -frames:v 1 -q:v 2 -y tooling/drive-hls-fixture/sprite.jpg"
   }
 }

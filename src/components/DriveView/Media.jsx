@@ -51,6 +51,10 @@ const styles = () => ({
     '&.disabled': {
       cursor: 'default',
     },
+    '&:focus-visible': {
+      outline: '2px solid #007cbf',
+      outlineOffset: 2,
+    },
     '&:last-child': {
       borderRight: 'none',
     },
@@ -563,29 +567,27 @@ class Media extends Component {
     const showMapAlways = windowWidth >= 1536;
 
     return (
-      <div className="flex flex-col gap-4">
+      <div className={`DriveMedia grid gap-4 ${showMapAlways ? 'grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : 'grid-cols-1'}`}>
         {this.renderMediaOptions(showMapAlways)}
-        <div className="flex flex-row gap-5">
-          <div className={showMapAlways ? 'w-[60%]' : 'w-full'}>
-            {inView === MediaType.VIDEO && (
-              <DriveVideo
-                isMuted={isMuted}
-                onAudioStatusChange={this.handleAudioStatusChange}
-              />
-            )}
-            {(inView === MediaType.MAP && !showMapAlways) && (
-              <div className="w-full">
-                <DriveMap />
-              </div>
-            )}
-          </div>
-          {(inView === MediaType.VIDEO && showMapAlways) &&
-            <div className="w-[40%]">
+        <div className="min-w-0">
+          {inView === MediaType.VIDEO && (
+            <DriveVideo
+              isMuted={isMuted}
+              onAudioStatusChange={this.handleAudioStatusChange}
+            />
+          )}
+          {(inView === MediaType.MAP && !showMapAlways) && (
+            <div className="w-full">
               <DriveMap />
             </div>
-          }
+          )}
         </div>
-        <div className={`${showMapAlways ? 'w-[60%]' : 'w-full'} self-start flex justify-center`}>
+        {(inView === MediaType.VIDEO && showMapAlways) && (
+          <div className="h-full min-w-0">
+            <DriveMap />
+          </div>
+        )}
+        <div className="min-w-0 flex justify-center">
           <TimeDisplay
             isThin
             isMuted={isMuted}
@@ -602,53 +604,61 @@ class Media extends Component {
     const { inView, clipsSupported } = this.state;
     return (
       <>
-        <div className="flex flex-wrap">
+        <div className="DriveMediaToolbar col-span-full flex flex-wrap items-center gap-2">
           { !showMapAlways && (
             <div className={classes.mediaOptions}>
-              <div
+              <button
+                type="button"
                 className={classes.mediaOption}
+                aria-pressed={inView === MediaType.VIDEO}
                 style={inView !== MediaType.VIDEO ? { opacity: 0.6 } : {}}
                 onClick={() => this.setState({ inView: MediaType.VIDEO })}
               >
-                <Typography className={classes.mediaOptionText}>Video</Typography>
-              </div>
-              <div
+                <Typography component="span" className={classes.mediaOptionText}>Video</Typography>
+              </button>
+              <button
+                type="button"
                 className={classes.mediaOption}
+                aria-pressed={inView === MediaType.MAP}
                 style={inView !== MediaType.MAP ? { opacity: 0.6 } : { }}
                 onClick={() => this.setState({ inView: MediaType.MAP })}
               >
-                <Typography className={classes.mediaOptionText}>Map</Typography>
-              </div>
+                <Typography component="span" className={classes.mediaOptionText}>Map</Typography>
+              </button>
             </div>
           )}
           <div className={`${classes.mediaOptions} ml-auto`}>
             {clipsSupported && <Tooltip title={deviceIsOnline(device) ? '' : 'Device offline'} placement="top">
-              <div
+              <button
+                type="button"
                 ref={this.menuAnchors.clips}
-                className={classes.mediaOption}
+                className={`${classes.mediaOption} ${deviceIsOnline(device) ? '' : 'disabled'}`}
                 style={deviceIsOnline(device) ? {} : { opacity: 0.7 }}
                 aria-haspopup="true"
+                aria-disabled={!deviceIsOnline(device)}
                 onClick={() => deviceIsOnline(device) && this.openMenu('clips')}
               >
-                <Typography className={classes.mediaOptionText}>Clip</Typography>
-              </div>
+                <Typography component="span" className={classes.mediaOptionText}>Clip</Typography>
+              </button>
             </Tooltip>}
-            <div
+            <button
+              type="button"
               ref={this.menuAnchors.downloads}
               className={classes.mediaOption}
               aria-haspopup="true"
               onClick={ () => this.openMenu('downloads') }
             >
-              <Typography className={classes.mediaOptionText}>Files</Typography>
-            </div>
-            <div
+              <Typography component="span" className={classes.mediaOptionText}>Files</Typography>
+            </button>
+            <button
+              type="button"
               ref={this.menuAnchors['route-info']}
               className={classes.mediaOption}
               aria-haspopup="true"
               onClick={ () => this.openMenu('route-info') }
             >
-              <Typography className={classes.mediaOptionText}>More info</Typography>
-            </div>
+              <Typography component="span" className={classes.mediaOptionText}>More info</Typography>
+            </button>
           </div>
         </div>
         { this.renderMenus() }

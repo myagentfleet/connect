@@ -30,6 +30,11 @@ const GALLERY_STATES = [
   { name: 'pair', label: 'Pair a device', path: '/', readyText: 'add new device' },
   { name: 'dashboard', label: 'Dashboard', path: `/${DONGLE_ID}`, readyText: 'Bronco Sport' },
   { name: 'drive', label: 'Drive', path: `/${DONGLE_ID}/${LOG_ID}`, readySelector: '.DriveView' },
+  {
+    name: 'drive-clips-toolbar', label: 'Drive with clip controls', page: 'drive',
+    path: `/${DONGLE_ID}/${LOG_ID}`, clips: true, newUrlState: true,
+    readySelector: '.DriveMediaToolbar [aria-haspopup="true"]',
+  },
   { name: 'checkout', label: 'Prime checkout', path: `/${DONGLE_ID}/prime`, readyText: '24/7 connectivity' },
   { name: 'management', label: 'Prime management', path: `/${DONGLE_ID}/prime`, readyText: 'Next payment' },
   { name: 'teleop', label: 'Teleop', path: `/${DONGLE_ID}/stream`, readyText: 'comma body' },
@@ -204,7 +209,10 @@ const GALLERY_STATES = [
 const GALLERY_VIEWPORTS = [
   { name: 'desktop', width: 1280, height: 800 },
   { name: 'mobile', width: 390, height: 844 },
-  { name: 'narrow', width: 320, height: 700, states: ['drive'] },
+  { name: 'narrow', width: 320, height: 700, states: ['drive', 'drive-clips-toolbar'] },
+  { name: 'compact-401', width: 401, height: 844, states: ['drive', 'drive-clips-toolbar'] },
+  { name: 'compact-450', width: 450, height: 844, states: ['drive', 'drive-clips-toolbar'] },
+  { name: 'wide', width: 1536, height: 960, states: ['drive'] },
 ];
 
 const execute = promisify(execFile);
@@ -862,7 +870,7 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
     ` });
     const label = `${state.name}/${viewport.name}`;
     await openGalleryModal(page, state, label);
-    if (verifyCurrent && state.name === 'drive') await verifyPlaybackControls(page, label);
+    if (verifyCurrent && ['drive', 'drive-clips-toolbar'].includes(state.name)) await verifyPlaybackControls(page, label);
     if (state.clipPlayback) await verifyClipPlayback(page, label);
     const buffer = await waitForStableFrames(page, label);
     if (failures.length) throw new Error(`${label}: ${failures.join('; ')}`);
