@@ -131,7 +131,7 @@ async function intercept(request, data, assets, result) {
 
 async function mediaState(page) {
   return page.$eval(VIDEO, (video) => ({
-    currentTime: video.currentTime, duration: video.duration, paused: video.paused,
+    currentTime: video.currentTime, duration: video.duration, paused: video.paused, seeking: video.seeking,
     readyState: video.readyState, width: video.videoWidth, height: video.videoHeight,
     frames: video.getVideoPlaybackQuality().totalVideoFrames,
     currentSrc: video.currentSrc, error: video.error?.message || null,
@@ -235,7 +235,15 @@ async function verifyPlayingNavigation(page, result) {
   await page.click('button[aria-label="Pause"]');
   await page.waitForFunction((selector) => document.querySelector(selector)?.paused, WAIT, VIDEO);
   await seekTimeline(page, 4);
+  // Native seeking can finish before DriveVideo's next buffering-state update.
+  await page.waitForSelector('.DriveView [role="progressbar"]', { hidden: true, timeout: WAIT.timeout });
+  await page.waitForFunction((selector) => {
+    const video = document.querySelector(selector);
+    return video && video.readyState >= 2 && !video.seeking && video.paused;
+  }, WAIT, VIDEO);
   result.finalCapture = await mediaState(page);
+  result.finalCapture.bufferingOverlayCleared = true;
+  assert.equal(result.finalCapture.error, null);
 }
 
 async function runCase(browser, assets, name, viewport) {
@@ -301,7 +309,7 @@ async function runCase(browser, assets, name, viewport) {
     assert.equal(result.sdkRequests, 1, 'Dialog changes reloaded the HLS SDK');
     assert.equal(result.manifestRequests, 1, 'Dialog changes restarted the HLS source');
     assert.equal(new Set(result.segments).size, 4, 'The full synthetic source was not loaded');
-    assert(!await page.evaluate(() => document.body.innerText.includes('Unable to load video')), 'The app displayed a video error');
+    assert(!await page.evaluate(() => /Unable to load video|This video segment has not uploaded/.test(document.body.innerText)), 'The app displayed a video error');
     assert.deepEqual(result.pageErrors, []);
     assert.deepEqual(result.requestErrors, []);
     result.phase = 'complete';
