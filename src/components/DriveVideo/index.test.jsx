@@ -162,6 +162,35 @@ test('the focused video control survives buffering and can pause before playback
   expect(video.paused).toBe(true);
 });
 
+test.each(['loading', 'failed'])('hides %s video overlays for Map and restores them without reloading', (status) => {
+  const { video, store, rerender, getByRole, getByLabelText, queryByRole } = mountVideo();
+  ready(video);
+  if (status === 'loading') fireEvent.waiting(video);
+  else fireEvent.error(video);
+  const before = store.getState();
+  const loads = video.load.mock.calls.length;
+  const plays = video.play.mock.calls.length;
+  expect(before.videoStatus).toBe(status);
+  expect(getByRole('status')).toBeVisible();
+  const controlName = status === 'failed' ? 'Retry' : 'Pause video';
+  const control = getByRole('button', { name: controlName });
+  control.focus();
+  const setVisible = (controlsVisible) => rerender(<Provider store={store}><DriveVideo isMuted controlsVisible={controlsVisible} /></Provider>);
+  setVisible(false);
+  expect(getByLabelText('Drive video')).toBe(video);
+  expect(queryByRole('status')).toBeNull();
+  expect(queryByRole('button')).toBeNull();
+  expect(control).not.toBeInTheDocument();
+  expect(store.getState()).toEqual(before);
+  setVisible(true);
+  expect(getByRole('status')).toBeVisible();
+  expect(getByRole('button', { name: controlName })).toBeEnabled();
+  expect(getByLabelText('Drive video')).toBe(video);
+  expect(store.getState()).toEqual(before);
+  expect(video.load).toHaveBeenCalledTimes(loads);
+  expect(video.play).toHaveBeenCalledTimes(plays);
+});
+
 test('uses the latest seek before metadata and corrects delayed first-frame metadata', () => {
   const { video, store } = mountVideo({ currentRoute: { ...route, videoStartOffset: 0 } });
   act(() => { store.dispatch(seek(9000)); store.dispatch(seek(17000)); store.dispatch(pause()); });
