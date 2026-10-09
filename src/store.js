@@ -7,10 +7,11 @@ import rootReducer from './reducers';
 import composeEnhancers from './devtools';
 import { onHistoryMiddleware } from './actions/history';
 import { analyticsMiddleware } from './analytics';
+import { createInitialState } from './initialState';
 
 export const history = createBrowserHistory();
 
-export function createAppStore(appHistory, preloadedState) {
+export function createAppStore(appHistory, preloadedState = createInitialState(appHistory.location)) {
   return Redux.createStore(
     connectRouter(appHistory)(rootReducer),
     preloadedState,

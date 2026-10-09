@@ -5,8 +5,9 @@ import { createMemoryHistory } from 'history';
 import App from './App';
 import { createInitialState } from './initialState';
 import { createAppStore } from './store';
+import * as clipApi from './api/clips';
 
-const mocks = vi.hoisted(() => ({ authenticated: true, options: {}, requests: [], hardNavigate: vi.fn() }));
+const mocks = vi.hoisted(() => ({ authenticated: true, options: {}, requests: [], unexpectedRequests: [], hardNavigate: vi.fn() }));
 
 vi.mock('@commaai/my-comma-auth', () => ({
   default: {
@@ -90,7 +91,7 @@ async function mockFetch(input, init = {}) {
   const deviceList = options.devices ?? devices;
   if (url.pathname === '/v1/me/turn') return json(null);
   if (url.pathname === '/v1/me/') return json({ id: 'test-user', superuser: false });
-  if (url.pathname === '/v1/me/devices/') return json(deviceList);
+  if (url.pathname === '/v1/me/devices/') return options.devicesResponse || json(deviceList);
   if (url.pathname === '/v1/referrals') return json(options.referrals ?? {
     code: 'ABC1234',
     cash: { available: 50, claimed: 50, pending: 50 },
@@ -116,11 +117,19 @@ async function mockFetch(input, init = {}) {
     const dongleId = url.pathname.split('/')[3];
     return json({ alias: 'Shared device', dongle_id: dongleId, device_type: 'threex', is_owner: false, prime: false });
   }
-  if (url.pathname.endsWith('/subscription') || url.pathname.endsWith('/subscribe_info')) return json(null);
+  if (url.pathname.endsWith('/subscription')) return json(options.subscription || null);
+  if (url.pathname === '/v1/prime/cancel') return json({ success: true });
+  if (url.pathname.endsWith('/subscribe_info')) return json(null);
   if (url.pathname.endsWith('/events.json') || url.pathname.endsWith('/coords.json')) return json([]);
   if (url.pathname.endsWith('/files') || url.pathname.endsWith('/preserved')) return json(url.pathname.endsWith('/files') ? {} : []);
-  if (url.hostname === 'athena.comma.ai') return json({ jsonrpc: '2.0', id: 0, result: {} });
-  throw new Error(`Unhandled request: ${init.method || 'GET'} ${url.href}`);
+  if (/^\/v1\/devices\/[a-f0-9]{16}\/athena_offline_queue$/.test(url.pathname)) return json([]);
+  if (url.hostname === 'athena.comma.ai') {
+    const { method } = JSON.parse(init.body);
+    return json({ jsonrpc: '2.0', id: 0, result: method === 'listUploadQueue' ? [] : {} });
+  }
+  const message = `Unhandled request: ${init.method || 'GET'} ${url.href}`;
+  mocks.unexpectedRequests.push(message);
+  throw new Error(message);
 }
 
 async function renderApp(pathname, options = {}) {
@@ -130,7 +139,7 @@ async function renderApp(pathname, options = {}) {
   window.history.replaceState({}, '', pathname);
   if (options.selected) localStorage.setItem('selectedDongleId', options.selected);
   const history = createMemoryHistory({ initialEntries: [pathname] });
-  const store = createAppStore(history, createInitialState(history.location.pathname));
+  const store = createAppStore(history, createInitialState(history.location));
   const view = render(<App history={history} store={store} />);
   await waitFor(
     () => expect(screen.queryByRole('status', { name: 'Loading' })).not.toBeInTheDocument(),
@@ -146,6 +155,7 @@ async function renderApp(pathname, options = {}) {
 }
 
 describe('whole-app behavior', () => {
+  beforeEach(() => { mocks.unexpectedRequests = []; });
   beforeAll(() => {
     vi.stubGlobal('fetch', vi.fn(mockFetch));
     vi.stubGlobal('PointerEvent', MouseEvent);
@@ -163,6 +173,9 @@ describe('whole-app behavior', () => {
     localStorage.clear();
     sessionStorage.clear();
     mocks.hardNavigate.mockClear();
+    if (mocks.unexpectedRequests.length) {
+      throw new Error(mocks.unexpectedRequests.join('\n'));
+    }
   });
 
   test('root uses a valid stored device and keeps the selection', async () => {
@@ -190,6 +203,30 @@ describe('whole-app behavior', () => {
     const { history } = await renderApp('/', { devices: [] });
     expect(await screen.findByRole('heading', { name: 'Pair your device' })).toBeVisible();
     expect(history.location.pathname).toBe('/');
+  });
+
+  test('an unknown URL shows not found even when the account has no devices', async () => {
+    const { history } = await renderApp('/unknown', { devices: [] });
+    expect(await screen.findByText('Page not found.')).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Pair your device' })).not.toBeInTheDocument();
+    expect(history.location.pathname).toBe('/unknown');
+  });
+
+  test('sharing a drive retains its range and unrelated query without dialog or pairing data', async () => {
+    const share = vi.fn(async () => undefined);
+    const previousShare = Object.getOwnPropertyDescriptor(navigator, 'share');
+    Object.defineProperty(navigator, 'share', { configurable: true, value: share });
+    try {
+      const pathname = `/${FIRST}/${LOG}/0/20`;
+      await renderApp(`${pathname}?x=a%26b&dialog=route-info&device=${SECOND}&parent=settings&clip=example.mp4&pair=token#video`);
+      fireEvent.click(await screen.findByText('Share this route'));
+      expect(share).toHaveBeenCalledExactlyOnceWith({
+        title: 'comma connect', url: `${window.location.origin}${pathname}?x=a%26b#video`,
+      });
+    } finally {
+      if (previousShare) Object.defineProperty(navigator, 'share', previousShare);
+      else delete navigator.share;
+    }
   });
 
   test('referrals URL opens the referrals page', async () => {
@@ -244,7 +281,7 @@ describe('whole-app behavior', () => {
   test('a missing public route redirects to login with the requested route', async () => {
     const pathname = `/${FIRST}/2026-08-06--99-99-99`;
     await renderApp(pathname, { authenticated: false });
-    await waitFor(() => expect(mocks.hardNavigate).toHaveBeenCalledWith(`/?r=${pathname}`));
+    await waitFor(() => expect(mocks.hardNavigate).toHaveBeenCalledWith(`/?r=${encodeURIComponent(pathname)}`));
   });
 
   test('legacy timestamp URL converts after a successful lookup', async () => {
@@ -297,10 +334,391 @@ describe('whole-app behavior', () => {
     fireEvent.pointerDown(timeline, { button: 0, clientX: 200, pageX: 200 });
     fireEvent.pointerMove(document, { clientX: 700, pageX: 700 });
     fireEvent.pointerUp(document, { button: 0, clientX: 700, pageX: 700 });
-    await waitFor(() => expect(history.location.pathname).toMatch(new RegExp(`/${FIRST}/${RECENT_LOG}/\\d+/\\d+$`)));
+    await waitFor(() => expect(history.location.pathname).toMatch(new RegExp(`/${FIRST}/${RECENT_LOG}/[0-9.]+/[0-9.]+$`)));
     act(() => history.goBack());
     await waitFor(() => expect(history.location.pathname).toBe(`/${FIRST}/${RECENT_LOG}`));
     fireEvent.click(within(document.body).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(history.location.pathname).toBe(`/${FIRST}`));
   });
+  test.each([
+    [`/${FIRST}?dialog=settings`, 'Device name'],
+    [`/${FIRST}/${LOG}?dialog=settings&device=${SECOND}`, 'Device name'],
+  ])('device settings opens from a cold URL %s', async (url, label) => {
+    const { history, store } = await renderApp(url);
+    expect(await screen.findByRole('dialog', { name: 'Device settings' })).toBeVisible();
+    const input = await screen.findByLabelText(label);
+    expect(input).toHaveValue(url.includes(`device=${SECOND}`) ? 'Alpha' : 'Zulu');
+    expect(store.getState().dongleId).toBe(FIRST);
+    expect(history.location.search).toBe(new URL(url, 'https://connect.comma.ai').search);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(history.location.search).toBe(''));
+    act(() => history.goBack());
+    expect(await screen.findByLabelText(label)).toBeVisible();
+  });
+
+  test('settings, Back and Forward retain drive playback and loaded route data', async () => {
+    const { history, store } = await renderApp(`/${FIRST}/${LOG}/0/20`);
+    expect(await screen.findByRole('slider', { name: 'Drive timeline' })).toBeVisible();
+    act(() => store.dispatch({ type: 'ACTION_SEEK', offset: 12345 }));
+    const before = store.getState();
+    const routeRequests = mocks.requests.filter(({ url }) => url.includes('routes_segments')).length;
+    act(() => history.push(`/${FIRST}/${LOG}/0/20?dialog=settings&device=${SECOND}`));
+    expect(await screen.findByLabelText('Device name')).toHaveValue('Alpha');
+    expect(store.getState().zoom).toBe(before.zoom);
+    expect(store.getState().currentRoute).toBe(before.currentRoute);
+    expect(store.getState().offset).toBe(before.offset);
+    act(() => history.goBack());
+    await waitFor(() => expect(screen.queryByLabelText('Device name')).not.toBeInTheDocument());
+    act(() => history.goForward());
+    expect(await screen.findByLabelText('Device name')).toBeVisible();
+    expect(mocks.requests.filter(({ url }) => url.includes('routes_segments'))).toHaveLength(routeRequests);
+  });
+
+  test.each([
+    [`/${FIRST}?dialog=filter`, 'Start date:'],
+    [`/${FIRST}?dialog=uploads`, 'Upload queue'],
+    [`/${FIRST}?dialog=clips`, 'CLIPS ON THIS DEVICE'],
+    [`/${FIRST}/${LOG}?dialog=clips`, 'Create a clip'],
+    ['/?dialog=pair', 'Pair device'],
+  ])('opens a major dialog from %s', async (url, text) => {
+    const { history } = await renderApp(url);
+    expect(await screen.findByText(text)).toBeVisible();
+    expect(history.location.search).toBe(new URL(url, 'https://connect.comma.ai').search);
+  });
+
+  test('filter drafts survive same-device navigation but reset to the next device’s saved filter', async () => {
+    const { history, store } = await renderApp(`/${SECOND}?dialog=filter`);
+    const dates = () => [screen.getByLabelText('Start date:'), screen.getByLabelText('End date:')];
+    const changeDates = (start, end) => {
+      fireEvent.change(dates()[0], { target: { value: start } });
+      fireEvent.change(dates()[1], { target: { value: end } });
+    };
+    expect(await screen.findByRole('dialog', { name: 'Filter' })).toBeVisible();
+    changeDates('2026-08-01', '2026-08-02');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(history.location.search).toBe(''));
+    const secondFilter = store.getState().filter;
+
+    act(() => history.push(`/${FIRST}?dialog=filter`));
+    expect(await screen.findByText('Start date:')).toBeVisible();
+    const firstFilter = store.getState().filter;
+    changeDates('2026-08-03', '2026-08-04');
+    act(() => history.push(`/${FIRST}?dialog=filter&x=1`));
+    expect(dates()[0]).toHaveValue('2026-08-03');
+    expect(dates()[1]).toHaveValue('2026-08-04');
+
+    act(() => history.push(`/${SECOND}?dialog=filter&x=1`));
+    expect(dates()[0]).toHaveValue('2026-08-01');
+    expect(dates()[1]).toHaveValue('2026-08-02');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(history.location.search).toBe('?x=1'));
+    expect(store.getState().filter).toEqual(secondFilter);
+    expect(store.getState().deviceCache[FIRST].filter).toEqual(firstFilter);
+  });
+
+  test('settings for an unselected device opens that same device upload queue', async () => {
+    const { history, store } = await renderApp(`/referrals?dialog=settings&device=${SECOND}`);
+    expect(await screen.findByLabelText('Device name')).toHaveValue('Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Uploads' }));
+    expect(await screen.findByText('Upload queue')).toBeVisible();
+    expect(history.location.pathname).toBe('/referrals');
+    expect(history.location.search).toBe(`?dialog=uploads&device=${SECOND}&parent=settings`);
+    expect(store.getState().navigation.dialogDevice).toBe(SECOND);
+    expect(store.getState().dongleId).toBe(FIRST);
+  });
+
+  test('settings retains an unsaved alias through uploads, Close, Back and Forward', async () => {
+    const { history } = await renderApp(`/${FIRST}/${LOG}/0/20?dialog=settings&device=${SECOND}`);
+    fireEvent.change(await screen.findByLabelText('Device name'), { target: { value: 'Unsaved device name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Uploads' }));
+    expect(await screen.findByText('Upload queue')).toBeVisible();
+    expect(screen.queryByLabelText('Device name')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(await screen.findByLabelText('Device name')).toHaveValue('Unsaved device name');
+    act(() => history.goBack());
+    expect(await screen.findByText('Upload queue')).toBeVisible();
+    act(() => history.goBack());
+    expect(await screen.findByLabelText('Device name')).toHaveValue('Unsaved device name');
+    act(() => history.goForward());
+    expect(await screen.findByText('Upload queue')).toBeVisible();
+    act(() => history.goForward());
+    expect(await screen.findByLabelText('Device name')).toHaveValue('Unsaved device name');
+    expect(history.location.pathname).toBe(`/${FIRST}/${LOG}/0/20`);
+  });
+
+  test('a cold nested upload queue closes to its target device settings', async () => {
+    const { history, store } = await renderApp(`/${FIRST}/${LOG}/0/20?dialog=uploads&device=${SECOND}&parent=settings`);
+    expect(await screen.findByRole('dialog', { name: 'Upload queue' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(await screen.findByLabelText('Device name')).toHaveValue('Alpha');
+    expect(history.location.pathname).toBe(`/${FIRST}/${LOG}/0/20`);
+    expect(history.location.search).toBe(`?dialog=settings&device=${SECOND}`);
+    expect(store.getState().dongleId).toBe(FIRST);
+  });
+
+  test('a cold unpair URL opens the target confirmation without unpairing', async () => {
+    const { history, store } = await renderApp(`/${FIRST}/${LOG}?dialog=unpair&device=${SECOND}`);
+    expect(await screen.findByRole('dialog', { name: 'Unpair device' })).toBeVisible();
+    const title = await screen.findByRole('heading', { name: 'Unpair device' });
+    expect(title).toBeVisible();
+    expect(within(title.parentElement).getByText(SECOND)).toBeVisible();
+    expect(mocks.requests.filter(({ method }) => method !== 'GET')).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByLabelText('Device name')).toHaveValue('Alpha');
+    expect(history.location.search).toBe(`?dialog=settings&device=${SECOND}`);
+    expect(store.getState().dongleId).toBe(FIRST);
+  });
+
+  test('unpair Cancel, Escape and browser history preserve the settings draft', async () => {
+    const { history } = await renderApp(`/${FIRST}?dialog=settings`);
+    fireEvent.change(await screen.findByLabelText('Device name'), { target: { value: 'Unsaved device name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Unpair' }));
+    expect(await screen.findByRole('heading', { name: 'Unpair device' })).toBeVisible();
+    expect(history.location.search).toBe(`?dialog=unpair&device=${FIRST}`);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByLabelText('Device name')).toHaveValue('Unsaved device name');
+    act(() => history.goBack());
+    expect(await screen.findByRole('heading', { name: 'Unpair device' })).toBeVisible();
+    act(() => history.goBack());
+    expect(await screen.findByLabelText('Device name')).toHaveValue('Unsaved device name');
+    act(() => history.goForward());
+    expect(await screen.findByRole('heading', { name: 'Unpair device' })).toBeVisible();
+    fireEvent.keyDown(document, { key: 'Escape', keyCode: 27 });
+    expect(await screen.findByLabelText('Device name')).toHaveValue('Unsaved device name');
+    expect(mocks.requests.filter(({ method }) => method !== 'GET')).toEqual([]);
+  });
+
+  test('nested uploads applies the settings access guard to a shared target device', async () => {
+    await renderApp(`/${FIRST}?dialog=uploads&device=${SECOND}&parent=settings`, {
+      devices: devices.map((device) => ({ ...device, is_owner: device.dongle_id === FIRST })),
+    });
+    expect(await screen.findByText('No access to this device.')).toBeVisible();
+    expect(screen.getByRole('dialog', { name: 'Device unavailable' })).toBeVisible();
+    expect(screen.queryByLabelText('Device name')).not.toBeInTheDocument();
+    expect(screen.queryByText('Upload queue')).not.toBeInTheDocument();
+  });
+
+  test('a cold settings link names its pending device dialog before device data arrives', async () => {
+    let resolveDevices;
+    const devicesResponse = new Promise(resolve => { resolveDevices = resolve; });
+    const { history } = await renderApp(`/${FIRST}/${LOG}?dialog=settings&device=${SECOND}`, { devicesResponse });
+    const dialog = screen.getByRole('dialog', { name: 'Loading device' });
+    expect(within(dialog).getByRole('progressbar', { name: 'Loading device' })).toBeVisible();
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeEnabled();
+    await act(async () => resolveDevices(await json(devices)));
+    expect(await screen.findByRole('dialog', { name: 'Device settings' })).toBeVisible();
+    expect(screen.getByLabelText('Device name')).toHaveValue('Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(history.location.search).toBe('');
+  });
+
+  test('opening pairing mounts exactly one scanner even when both entry buttons are present', async () => {
+    const { history } = await renderApp(`/${FIRST}`);
+    act(() => history.push(`/${FIRST}?dialog=pair`));
+    expect(await screen.findAllByText('Pair device')).toHaveLength(1);
+    act(() => history.goBack());
+    await waitFor(() => expect(screen.queryByText('Pair device')).not.toBeInTheDocument());
+    act(() => history.goForward());
+    expect(await screen.findAllByText('Pair device')).toHaveLength(1);
+  });
+
+  test.each([
+    ['cancel-prime', 'Cancel prime subscription'],
+    ['change-plan', 'Switch to Standard plan'],
+  ])('opens the %s confirmation without submitting a transaction', async (dialog, title) => {
+    const { history } = await renderApp(`/${FIRST}/prime?dialog=${dialog}`, {
+      devices: devices.map((device) => ({ ...device, prime: true })),
+      subscription: { user_id: 'test-user', plan: 'nodata', subscribed_at: 1000, next_charge_at: 2000 },
+    });
+    expect(await screen.findByRole('heading', { name: title })).toBeVisible();
+    expect(history.location.search).toBe(`?dialog=${dialog}`);
+    expect(mocks.requests.filter(({ method }) => method !== 'GET')).toEqual([]);
+  });
+
+  test('a completed cancellation remains disabled after reopening with stale subscription data', async () => {
+    const { history, store } = await renderApp(`/${FIRST}/prime?dialog=cancel-prime`, {
+      devices: devices.map((device) => ({ ...device, prime: true })),
+      subscription: { user_id: 'test-user', plan: 'nodata', subscribed_at: 1000, next_charge_at: 2000 },
+    });
+    const heading = await screen.findByRole('heading', { name: 'Cancel prime subscription' });
+    fireEvent.click(within(heading.parentElement).getByRole('button', { name: 'Cancel subscription' }));
+    expect(await screen.findByText('Cancelled subscription.')).toBeVisible();
+    await waitFor(() => expect(mocks.requests.filter(({ url }) => new URL(url).pathname.endsWith('/subscription'))).toHaveLength(2));
+    expect(store.getState().subscription.cancel_at).toBeUndefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByText('Cancelled subscription.')).not.toBeInTheDocument());
+    act(() => history.goBack());
+    expect(await screen.findByText('Cancelled subscription.')).toBeVisible();
+    const cancel = screen.getByRole('button', { name: 'Cancel subscription' });
+    expect(cancel).toBeDisabled();
+    fireEvent.click(cancel);
+    expect(mocks.requests.filter(({ method, url }) => method === 'POST' && new URL(url).pathname === '/v1/prime/cancel')).toHaveLength(1);
+  });
+
+  test('anonymous navigation follows the public/private boundary and retains the complete login destination', async () => {
+    const { history } = await renderApp(`/${FIRST}/${LOG}`, { authenticated: false });
+    expect(await screen.findByRole('slider', { name: 'Drive timeline' })).toBeVisible();
+    const destination = `/${FIRST}/${LOG}?dialog=settings#video`;
+    act(() => history.push(destination));
+    expect(await screen.findByText('Sign in with Google')).toBeVisible();
+    expect(sessionStorage.getItem('redirectURL')).toBe(destination);
+    act(() => history.goBack());
+    expect(await screen.findByRole('slider', { name: 'Drive timeline' })).toBeVisible();
+  });
+
+  test('warm same-device navigation loads an older drive without replacing the dashboard list', async () => {
+    const { history, store } = await renderApp(`/${FIRST}`);
+    expect(await screen.findByText('Mock recent route start')).toBeVisible();
+    const list = store.getState().routes;
+    act(() => history.push(`/${FIRST}/${LOG}`));
+    expect(await screen.findByRole('slider', { name: 'Drive timeline' })).toBeVisible();
+    expect(store.getState().currentRoute.log_id).toBe(LOG);
+    expect(store.getState().routes).toBe(list);
+    act(() => history.goBack());
+    expect(await screen.findByText('Mock recent route start')).toBeVisible();
+    expect(store.getState().selectedRouteId).toBeNull();
+  });
+
+  test('settings opened in a temporary drawer remains visible after the drawer closes', async () => {
+    const { history } = await renderApp(`/${FIRST}`);
+    fireEvent.click(screen.getByRole('button', { name: 'menu' }));
+    const deviceLink = await screen.findByRole('link', { name: /Zulu/ });
+    fireEvent.click(within(deviceLink).getByRole('button', { name: 'device settings' }));
+    expect(await screen.findByLabelText('Device name')).toHaveValue('Zulu');
+    expect(history.location.search).toBe(`?dialog=settings&device=${FIRST}`);
+    await waitFor(() => expect(screen.queryByRole('link', { name: /Zulu/ })).not.toBeInTheDocument());
+    expect(screen.getByLabelText('Device name')).toBeVisible();
+  });
+
+  test.each(['downloads', 'route-info'])('a public drive can open its %s dialog without signing in', async (dialog) => {
+    const { history } = await renderApp(`/${FIRST}/${LOG}?dialog=${dialog}`, { authenticated: false });
+    expect(await screen.findByRole('menu')).toBeVisible();
+    expect(screen.queryByText('Sign in with Google')).not.toBeInTheDocument();
+    expect(history.location.search).toBe(`?dialog=${dialog}`);
+  });
+
+  test.each([['downloads', 'Files'], ['route-info', 'More info']])('a cold %s menu stays anchored to its trigger through history and click navigation', async (dialog, label) => {
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect');
+    try {
+      const { history } = await renderApp(`/${FIRST}/${LOG}?dialog=${dialog}`);
+      const trigger = screen.getByText(label).parentElement;
+      expect(await screen.findByRole('menu')).toBeVisible();
+      expect(measure.mock.contexts).toContain(trigger);
+
+      fireEvent.keyDown(document, { key: 'Escape', keyCode: 27 });
+      await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+      expect(history.location.search).toBe('');
+      measure.mockClear();
+      act(() => history.goBack());
+      expect(await screen.findByRole('menu')).toBeVisible();
+      expect(measure.mock.contexts).toContain(trigger);
+
+      act(() => history.goForward());
+      await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+      measure.mockClear();
+      fireEvent.click(trigger);
+      expect(await screen.findByRole('menu')).toBeVisible();
+      expect(measure.mock.contexts).toContain(trigger);
+      expect(history.location.search).toBe(`?dialog=${dialog}`);
+    } finally {
+      measure.mockRestore();
+    }
+  });
+
+  test.each(['dashboard', 'drive'])('a cold %s clips panel follows its trigger when support resolves', async (page) => {
+    let resolveSupport;
+    const support = vi.spyOn(clipApi, 'deviceSupportsClips').mockReturnValue(new Promise((resolve) => { resolveSupport = resolve; }));
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect');
+    try {
+      const pathname = page === 'drive' ? `/${FIRST}/${LOG}` : `/${FIRST}`;
+      await renderApp(`${pathname}?dialog=clips`);
+      expect(await screen.findByRole('dialog')).toBeVisible();
+      expect(screen.queryByLabelText('Clips')).not.toBeInTheDocument();
+      expect(screen.queryByText('Clip')).not.toBeInTheDocument();
+
+      measure.mockClear();
+      await act(async () => resolveSupport(true));
+      const trigger = page === 'drive' ? screen.getByText('Clip').parentElement : screen.getByLabelText('Clips');
+      await waitFor(() => expect(measure.mock.contexts).toContain(trigger));
+    } finally {
+      support.mockRestore();
+      measure.mockRestore();
+    }
+  });
+
+  test('More info fetches the current drive files when files from another drive are retained', async () => {
+    const { history, store } = await renderApp(`/${FIRST}/${LOG}`);
+    expect(await screen.findByRole('slider', { name: 'Drive timeline' })).toBeVisible();
+    act(() => store.dispatch({ type: 'ACTION_FILES_URLS', dongleId: FIRST,
+      urls: { [`${FIRST}|${LOG}--0/qcameras`]: { url: 'https://routes.example.com/a.ts' } } }));
+    act(() => history.push(`/${FIRST}/${RECENT_LOG}`));
+    await waitFor(() => expect(store.getState().currentRoute?.log_id).toBe(RECENT_LOG));
+    act(() => history.push(`/${FIRST}/${RECENT_LOG}?dialog=route-info`));
+    expect(await screen.findByRole('menu')).toBeVisible();
+    await waitFor(() => expect(mocks.requests.some(({ url }) => (
+      decodeURIComponent(url).includes(`${FIRST}|${RECENT_LOG}/files`)
+    ))).toBe(true));
+  });
+
+  test.each(['unchanged', 'another dialog', 'unmounted', 'A to B to A'])('route-info clipboard completion is scoped to its opening visit: %s', async (navigation) => {
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    let completeCopy;
+    const writeText = vi.fn(() => new Promise(resolve => { completeCopy = resolve; }));
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      const pathname = `/${FIRST}/${LOG}`;
+      const destination = `${pathname}?x=1&dialog=route-info#video`;
+      const { history, store } = await renderApp(destination);
+      fireEvent.click(await screen.findByText(`${FIRST}/${LOG}/0`));
+      expect(writeText).toHaveBeenCalledExactlyOnceWith(`${FIRST}/${LOG}/0`);
+
+      if (navigation === 'another dialog') {
+        act(() => history.push(`${pathname}?dialog=settings`));
+        await screen.findByRole('dialog', { name: 'Device settings' });
+      } else if (navigation === 'unmounted') {
+        act(() => history.push(`/${FIRST}?dialog=settings`));
+        await screen.findByRole('dialog', { name: 'Device settings' });
+      } else if (navigation === 'A to B to A') {
+        act(() => store.dispatch({ type: 'ACTION_ROUTES_METADATA', dongleId: FIRST, routeId: RECENT_LOG,
+          routes: [{ ...makeRoute(FIRST), log_id: RECENT_LOG, duration: 60000 }] }));
+        act(() => history.push(`/${FIRST}/${RECENT_LOG}?dialog=route-info`));
+        await screen.findByText(`${FIRST}/${RECENT_LOG}/0`);
+        act(() => history.goBack());
+        await screen.findByText(`${FIRST}/${LOG}/0`);
+      }
+
+      const beforeCompletion = history.location;
+      await act(async () => completeCopy());
+      const unchanged = navigation === 'unchanged';
+      expect(history.location).toMatchObject(unchanged ? { pathname, search: '?x=1', hash: '#video' } : beforeCompletion);
+      expect(history.location === beforeCompletion).toBe(!unchanged);
+    } finally {
+      if (previousClipboard) Object.defineProperty(navigator, 'clipboard', previousClipboard);
+      else delete navigator.clipboard;
+    }
+  });
+
+  test('leaving pairing stops a camera stream acquired after the dialog closed', async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+    let resolveStream;
+    const stop = vi.fn();
+    const mediaDevices = {
+      enumerateDevices: vi.fn(async () => [{ kind: 'videoinput' }]),
+      getUserMedia: vi.fn(() => new Promise((resolve) => { resolveStream = resolve; })),
+    };
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: mediaDevices });
+    try {
+      const { history } = await renderApp(`/${FIRST}`);
+      act(() => history.push(`/${FIRST}?dialog=pair`));
+      await waitFor(() => expect(mediaDevices.getUserMedia).toHaveBeenCalledOnce());
+      act(() => history.goBack());
+      await act(async () => resolveStream({ getTracks: () => [{ stop }] }));
+      expect(stop).toHaveBeenCalledOnce();
+      expect(screen.queryByText('Pair device')).not.toBeInTheDocument();
+    } finally {
+      if (original) Object.defineProperty(navigator, 'mediaDevices', original);
+      else delete navigator.mediaDevices;
+    }
+  });
+
 });

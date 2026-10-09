@@ -60,13 +60,12 @@ const DriveListItem = (props) => {
   const { classes, dispatch, drive } = props;
 
   useEffect(() => {
+    if (isVisible) return;
     const onScroll = () => {
-      if (!isVisible && el.current && window && (!window.visualViewport
+      if (el.current && window && (!window.visualViewport
           || window.visualViewport.height >= el.current.getBoundingClientRect().y - 300)
       ) {
         setVisible(true);
-        dispatch(fetchEvents(drive));
-        dispatch(fetchLocations(drive));
 
         window.removeEventListener('scroll', onScroll);
         window.removeEventListener('resize', onScroll);
@@ -81,10 +80,17 @@ const DriveListItem = (props) => {
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onScroll);
     };
-  }, [drive, dispatch, isVisible, el]);
+  }, [isVisible]);
+
+  useEffect(() => {
+    if (isVisible) {
+      dispatch(fetchEvents(drive));
+      dispatch(fetchLocations(drive));
+    }
+  }, [drive, dispatch, isVisible]);
 
   const onClick = filterRegularClick(
-    () => dispatch(pushTimelineRange(drive.log_id, 0, drive.duration, true)),
+    () => dispatch(pushTimelineRange(drive.log_id)),
   );
 
   const small = windowWidth < 580;

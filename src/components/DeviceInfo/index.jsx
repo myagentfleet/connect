@@ -8,6 +8,7 @@ import { withStyles, Typography, CircularProgress, Popper, Tooltip } from '@mate
 import { athena as Athena } from '../../api';
 import { deviceSupportsClips } from '../../api/clips';
 import { analyticsEvent, primeNav, streamNav, fetchDeviceNotCar } from '../../actions';
+import { openDialog, closeDialog } from '../../actions/navigation';
 import Colors from '../../colors';
 import { deviceNamePretty, deviceIsOnline, deviceVersionAtLeast, truncateName } from '../../utils';
 import { webrtcConnectionManager } from '../../utils/webrtc';
@@ -153,11 +154,11 @@ class DeviceInfo extends Component {
       snapshot: {},
       windowWidth: window.innerWidth,
       bodyTeleopOpen: false,
-      clipMenu: null,
       clipsSupported: false,
     };
 
     this.snapshotButtonRef = React.createRef();
+    this.clipButtonRef = React.createRef();
 
     this.onVisible = this.onVisible.bind(this);
     this.fetchDeviceCarHealth = this.fetchDeviceCarHealth.bind(this);
@@ -190,7 +191,6 @@ class DeviceInfo extends Component {
         carHealth: {},
         snapshot: {},
         windowWidth: window.innerWidth,
-        clipMenu: null,
         clipsSupported: false,
       });
       this.checkClipsSupport();
@@ -330,10 +330,13 @@ class DeviceInfo extends Component {
           </div>
         </div>
         <ClipMenu
-          open={Boolean(this.state.clipMenu)}
+          open={['clips', 'clip', 'delete-clip'].includes(this.props.dialog)}
+          dialog={this.props.dialog}
+          dialogClip={this.props.dialogClip}
+          dispatch={this.props.dispatch}
           dongleId={this.props.dongleId}
-          anchorEl={this.state.clipMenu}
-          onClose={() => this.setState({ clipMenu: null })}
+          anchorEl={() => this.clipButtonRef.current}
+          onClose={() => this.props.dispatch(closeDialog())}
           routes={this.props.routes}
           deviceOnline={deviceIsOnline(device)}
           inventoryOnly
@@ -411,9 +414,10 @@ class DeviceInfo extends Component {
         >
           <span className="inline-flex">
             <button
+              ref={this.clipButtonRef}
               className={`${classes.button} ${classes.carBattery}`}
               aria-label="Clips"
-              onClick={(event) => this.setState({ clipMenu: event.currentTarget })}
+              onClick={() => this.props.dispatch(openDialog('clips'))}
               disabled={offline}
             >
               <ContentCut />
@@ -517,6 +521,8 @@ const stateToProps = (state) => ({
   dongleId: state.dongleId,
   device: state.device,
   routes: state.routes,
+  dialog: state.navigation.dialog,
+  dialogClip: state.navigation.dialogClip,
 });
 
 export default connect(stateToProps)(withStyles(styles)(DeviceInfo));

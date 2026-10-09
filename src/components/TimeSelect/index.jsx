@@ -70,12 +70,13 @@ const TimeSelect = ({ classes, onClose, filter, dispatch }) => {
   const maxDate = formatDate(max);
 
   return (
-    <Modal open onClose={onClose} className="flex items-center justify-center">
+    <Modal role="dialog" aria-label="Filter" open onClose={onClose} className="flex items-center justify-center">
       <Paper className="p-4 outline-none">
         <div className="flex flex-col xs:flex-row gap-6 justify-between mb-5">
           <div className="flex w-30 flex-col gap-1.5">
-            <Typography variant="subheading">Start date:</Typography>
+            <Typography component="label" htmlFor="filter-start-date" variant="subheading">Start date:</Typography>
             <input
+              id="filter-start-date"
               className="w-full box-border"
               type="date"
               min={minDate}
@@ -85,8 +86,9 @@ const TimeSelect = ({ classes, onClose, filter, dispatch }) => {
             />
           </div>
           <div className="flex w-30 flex-col gap-1.5">
-            <Typography variant="subheading">End date:</Typography>
+            <Typography component="label" htmlFor="filter-end-date" variant="subheading">End date:</Typography>
             <input
+              id="filter-end-date"
               className="w-full box-border"
               type="date"
               min={start}

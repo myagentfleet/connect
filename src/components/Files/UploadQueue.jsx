@@ -195,10 +195,10 @@ class UploadQueue extends Component {
 
     return (
       <>
-        <Modal aria-labelledby="upload-queue-modal" open={ this.props.open } onClose={ this.props.onClose }>
+        <Modal role="dialog" aria-labelledby="upload-queue-modal" open={ this.props.open } onClose={ this.props.onClose }>
           <Paper className={ classes.modal }>
             <div className={ classes.titleContainer }>
-              <Typography variant="title">Upload queue</Typography>
+              <Typography id="upload-queue-modal" variant="title">Upload queue</Typography>
               <Typography variant="caption" style={{ marginLeft: 8 }}>{ device.dongle_id }</Typography>
             </div>
             <hr />
@@ -297,9 +297,15 @@ class UploadQueue extends Component {
   }
 }
 
-const stateToProps = (state) => ({
-  filesUploading: state.filesUploading,
-  filesUploadingMeta: state.filesUploadingMeta,
-});
+const emptyUploads = {};
+const emptyUploadsMeta = { dongleId: null, fetchedAt: null };
+
+const stateToProps = (state, { device }) => {
+  const deviceState = state.dongleId === device.dongle_id ? state : state.deviceCache[device.dongle_id];
+  return {
+    filesUploading: deviceState?.filesUploading || emptyUploads,
+    filesUploadingMeta: deviceState?.filesUploadingMeta || emptyUploadsMeta,
+  };
+};
 
 export default connect(stateToProps)(withStyles(styles)(UploadQueue));

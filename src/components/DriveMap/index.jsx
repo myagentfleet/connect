@@ -48,19 +48,21 @@ class DriveMap extends Component {
 
     const prevRoute = prevProps.currentRoute?.fullname || null;
     const route = currentRoute?.fullname || null;
-    if (prevRoute !== route) {
+    const routeChanged = prevRoute !== route;
+    const coordsInvalidated = prevProps.currentRoute?.driveCoords && !currentRoute?.driveCoords;
+    if (routeChanged || coordsInvalidated) {
       this.setPath([]);
-      if (route) {
-        dispatch(fetchDriveCoords(currentRoute));
-      }
+    }
+    if (route && !currentRoute.driveCoords && (routeChanged || coordsInvalidated
+      || prevProps.currentRoute?.maxqlog !== currentRoute.maxqlog)) {
+      dispatch(fetchDriveCoords(currentRoute));
     }
 
     if (prevProps.startTime && prevProps.startTime !== startTime) {
       this.shouldFlyTo = true;
     }
 
-    if (currentRoute && prevProps.currentRoute && currentRoute.driveCoords
-      && prevProps.currentRoute.driveCoords !== currentRoute.driveCoords) {
+    if (currentRoute?.driveCoords && prevProps.currentRoute?.driveCoords !== currentRoute.driveCoords) {
       this.shouldFlyTo = false;
       const keys = Object.keys(currentRoute.driveCoords);
       this.setState({

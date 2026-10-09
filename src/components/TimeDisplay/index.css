@@ -1,0 +1,34 @@
+.PlaybackControlsContainer {
+  width: 100%;
+  container-type: inline-size;
+}
+
+.PlaybackControls {
+  display: grid;
+  grid-template-columns: 44px 44px minmax(100px, 1fr) 52px 44px 44px;
+  align-items: center;
+  gap: 4px;
+}
+
+.PlaybackControls.isIos {
+  grid-template-columns: 44px 44px minmax(100px, 1fr) 44px 44px;
+}
+
+.PlaybackControlsTime {
+  min-width: 0;
+}
+
+@container (max-width: 380px) {
+  .PlaybackControls {
+    grid-template-columns: repeat(2, minmax(44px, 1fr)) minmax(52px, 1fr) repeat(2, minmax(44px, 1fr));
+  }
+
+  .PlaybackControls.isIos {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .PlaybackControlsTime {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+}

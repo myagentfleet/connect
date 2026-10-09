@@ -9,7 +9,7 @@ import MyCommaAuth, { config as AuthConfig, storage as AuthStorage } from '@comm
 import { athena as Athena, billing as Billing, request as Request } from './api';
 import { api, initBackend } from './api/backend';
 
-import { getZoom, getRouteId, getDongleID, getStreamNav } from './url';
+import { parseLocation, isPublicLocation } from './url';
 import { webrtcConnectionManager } from './utils/webrtc';
 import { fetchTurnCredentials } from './utils/turn';
 import defaultStore, { history as defaultHistory } from './store';
@@ -28,14 +28,10 @@ class App extends Component {
       initialized: false,
     };
 
-    let pairToken;
-    if (window.location) {
-      pairToken = new URLSearchParams(window.location.search).get('pair');
-    }
-
+    const { pairToken } = parseLocation(window.location);
     if (pairToken) {
       try {
-        localforage.setItem('pairToken', pairToken);
+        Promise.resolve(localforage.setItem('pairToken', pairToken)).catch((err) => console.error(err));
       } catch (err) {
         console.error(err);
       }
@@ -78,10 +74,9 @@ class App extends Component {
 
       // Reloading: start the webrtc handshake as soon as the API is authed, so it runs in parallel
       // with the lazy explorer chunk load and redux/device init instead of behind them.
-      const { pathname } = window.location;
-      const teleopDongleId = getDongleID(pathname);
-      if (teleopDongleId && getStreamNav(pathname)) {
-        webrtcConnectionManager.reconnect(teleopDongleId);
+      const route = parseLocation(window.location);
+      if (route.dongleId && route.page === 'stream') {
+        webrtcConnectionManager.reconnect(route.dongleId);
       }
 
       fetchTurnCredentials().catch((err) => {
@@ -105,9 +100,7 @@ class App extends Component {
   authRoutes() {
     return (
       <Switch>
-        <Route path="/auth/">
-          <Redirect to={this.redirectLink()} />
-        </Route>
+        <Route path="/auth/" render={() => <Redirect to={this.redirectLink()} />} />
         <Route path="/" component={Explorer} />
       </Switch>
     );
@@ -130,11 +123,13 @@ class App extends Component {
     }
 
     const { store = defaultStore, history = defaultHistory } = this.props;
-    const pathname = history.location.pathname;
-    const showLogin = !api.auth.isAuthenticated() && !getZoom(pathname) && !getRouteId(pathname);
     let content = (
       <Suspense fallback={<FullPageLoading />}>
-        { showLogin ? this.anonymousRoutes() : this.authRoutes() }
+        <Route render={({ location }) => (
+          !api.auth.isAuthenticated() && !isPublicLocation(location)
+            ? this.anonymousRoutes()
+            : this.authRoutes()
+        )} />
       </Suspense>
     );
 

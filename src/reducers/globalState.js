@@ -1,9 +1,30 @@
 import * as Types from '../actions/types';
 import { emptyDevice } from '../utils';
-import { getDefaultFilter } from '../utils/filter';
+import { createDeviceState } from '../initialState';
+import { reconcileRouteList, resolveSelectedRoute } from './navigation';
 
-const eventsMap = {};
-const locationMap = {};
+function updateDeviceState(state, dongleId, update) {
+  if (dongleId === state.dongleId) return update(state);
+  const previous = state.deviceCache[dongleId] || createDeviceState();
+  const next = update(previous);
+  if (next === previous) return state;
+  return { ...state, deviceCache: { ...state.deviceCache, [dongleId]: next } };
+}
+
+function updateRoute(state, fullname, fields, maxqlog) {
+  const previous = Object.hasOwn(state.routeCache, fullname)
+    ? state.routeCache[fullname] : state.routes?.find((route) => route.fullname === fullname);
+  if (!previous || (maxqlog !== undefined && previous.maxqlog !== maxqlog)) return state;
+  const updated = { ...previous, ...fields };
+  const routeCache = { ...state.routeCache, [fullname]: updated };
+  return {
+    ...state,
+    routeCache,
+    routes: reconcileRouteList(state.routes, routeCache),
+    lastRoutes: reconcileRouteList(state.lastRoutes, routeCache),
+    currentRoute: state.currentRoute?.fullname === fullname ? updated : state.currentRoute,
+  };
+}
 
 function populateFetchedAt(d) {
   return {
@@ -32,57 +53,13 @@ export default function reducer(_state, action) {
     case Types.ACTION_STARTUP_DATA: {
       const devices = action.devices.map(populateFetchedAt).sort(deviceCompareFn);
 
-      if (!state.dongleId && devices.length > 0) {
-        state = {
-          ...state,
-          device: devices[0],
-        };
-      } else {
-        state = {
-          ...state,
-          device: devices.find((device) => device.dongle_id === state.dongleId),
-        };
-        if (!state.device) {
-          state.device = {
-            ...emptyDevice,
-            dongle_id: state.dongleId,
-          };
-        }
-      }
+      state.dongleId = state.dongleId || action.defaultDongleId || null;
+      state.device = devices.find((device) => device.dongle_id === state.dongleId)
+        || { ...emptyDevice, dongle_id: state.dongleId };
       state.devices = devices;
       state.profile = action.profile;
       break;
     }
-    case Types.ACTION_SELECT_DEVICE:
-      state = {
-        ...state,
-        filter: getDefaultFilter(),
-        dongleId: action.dongleId,
-        primeNav: false,
-        streamNav: false,
-        subscription: null,
-        subscribeInfo: null,
-        files: null,
-        limit: 0,
-      };
-      window.localStorage.setItem('selectedDongleId', action.dongleId);
-      if (state.devices) {
-        const newDevice = state.devices.find((device) => device.dongle_id === action.dongleId) || null;
-        if (!state.device || state.device.dongle_id !== action.dongleId) {
-          state.device = newDevice;
-        }
-      }
-      if (state.routesMeta && state.routesMeta.dongleId !== state.dongleId) {
-        state.routesMeta = {
-          dongleId: null,
-          start: null,
-          end: null,
-        };
-        state.routes = null;
-        state.lastRoutes = null;
-        state.currentRoute = null;
-      }
-      break;
     case Types.ACTION_SELECT_TIME_FILTER:
       state = {
         ...state,
@@ -97,7 +74,6 @@ export default function reducer(_state, action) {
           end: null,
         },
         routes: null,
-        currentRoute: null,
       };
       break;
     case Types.ACTION_UPDATE_ROUTE_LIMIT:
@@ -151,78 +127,20 @@ export default function reducer(_state, action) {
       break;
     }
     case Types.ACTION_UPDATE_ROUTE:
-      if (state.routes) {
-        state.routes = state.routes.map((route) => {
-          if (route.fullname === action.fullname) {
-            return {
-              ...route,
-              ...action.route,
-            };
-          }
-          return route;
-        });
-      }
-      if (state.currentRoute && state.currentRoute.fullname === action.fullname) {
-        state.currentRoute = {
-          ...state.currentRoute,
-          ...action.route,
-        };
-      }
+      state = updateRoute(state, action.fullname, action.route, action.maxqlog);
       break;
     case Types.ACTION_UPDATE_ROUTE_EVENTS: {
-      const firstFrame = action.events.find((ev) => ev.type === 'event' && ev.data.event_type === 'first_road_camera_frame');
-      const videoStartOffset = firstFrame ? firstFrame.route_offset_millis : null;
-      eventsMap[action.fullname] = {
+      const firstFrame = action.events.find((event) => event.type === 'event'
+        && event.data.event_type === 'first_road_camera_frame');
+      state = updateRoute(state, action.fullname, {
         events: action.events,
-        videoStartOffset,
-      }
-      if (state.routes) {
-        state.routes = state.routes.map((route) => {
-          const ev = eventsMap[route.fullname];
-          if (ev) {
-            return {
-              ...route,
-              events: ev.events,
-              videoStartOffset: ev.videoStartOffset,
-            };
-          }
-          return route;
-        });
-      }
-      if (state.currentRoute && state.currentRoute.fullname === action.fullname) {
-        state.currentRoute = {
-          ...state.currentRoute,
-          events: action.events,
-          videoStartOffset,
-        };
-      }
+        videoStartOffset: firstFrame ? firstFrame.route_offset_millis : null,
+      }, action.maxqlog);
       break;
     }
-    case Types.ACTION_UPDATE_ROUTE_LOCATION: {
-      locationMap[action.fullname] = {
-        location: action.location,
-        locationKey: action.locationKey,
-      }
-      if (state.routes) {
-        state.routes = state.routes.map((route) => {
-          const loc = locationMap[route.fullname];
-          if (loc) {
-            return {
-              ...route,
-              [loc.locationKey]: loc.location,
-            };
-          }
-          return route;
-        });
-      }
-      if (state.currentRoute && state.currentRoute.fullname === action.fullname) {
-        state.currentRoute = {
-          ...state.currentRoute,
-        };
-        state.currentRoute[action.locationKey] = action.location;
-      }
+    case Types.ACTION_UPDATE_ROUTE_LOCATION:
+      state = updateRoute(state, action.fullname, { [action.locationKey]: action.location });
       break;
-    }
     case Types.ACTION_UPDATE_SHARED_DEVICE:
       if (action.dongleId === state.dongleId) {
         state.device = populateFetchedAt(action.device);
@@ -300,21 +218,6 @@ export default function reducer(_state, action) {
         };
       }
       break;
-    case Types.ACTION_PRIME_NAV:
-      state = {
-        ...state,
-        primeNav: action.primeNav,
-      };
-      if (action.primeNav) {
-        state.zoom = null;
-      }
-      break;
-    case Types.ACTION_STREAM_NAV:
-      state = {
-        ...state,
-        streamNav: action.streamNav,
-      };
-      break;
     case Types.ACTION_PRIME_SUBSCRIPTION:
       if (action.dongleId !== state.dongleId) { // ignore outdated info
         break;
@@ -335,119 +238,89 @@ export default function reducer(_state, action) {
         subscription: null,
       };
       break;
-    case Types.TIMELINE_POP_SELECTION:
-      if (state.zoom.previous) {
-        state.zoom = state.zoom.previous;
-      } else {
-        state.zoom = null;
-        state.loop = null;
-      }
-      break;
-    case Types.TIMELINE_PUSH_SELECTION: {
-      if (!state.zoom || !action.start || !action.end || action.start < state.zoom.start || action.end > state.zoom.end) {
-        state.files = null;
-      }
-
-      state.selectedRouteId = action.log_id;
-      state.currentRoute = state.routes?.find((route) => route.log_id === action.log_id) || null;
-      if (action.log_id) {
-        if (action.start != null && action.end != null) {
-          state.zoom = {
-            start: action.start,
-            end: action.end,
-            previous: state.zoom,
-          };
-        } else {
-          state.zoom = state.currentRoute ? {
-            start: 0,
-            end: state.currentRoute.duration,
-            previous: state.zoom,
-          } : null;
-          state.loop = null;
-        }
-      } else {
-        state.zoom = null;
-        state.loop = null;
-      }
-      break;
-    }
     case Types.ACTION_FILES_URLS:
-      state.files = {
-        ...(state.files !== null ? { ...state.files } : {}),
-        ...action.urls,
-      };
-      break;
     case Types.ACTION_FILES_UPDATE:
-      state.files = {
-        ...(state.files !== null ? { ...state.files } : {}),
-        ...action.files,
-      };
+      state = updateDeviceState(state, action.dongleId, (device) => ({
+        ...device,
+        files: { ...device.files, ...(action.urls || action.files) },
+      }));
       break;
     case Types.ACTION_FILES_UPLOADING:
-      state.filesUploading = action.uploading;
-      state.filesUploadingMeta = {
-        dongleId: action.dongleId,
-        fetchedAt: Date.now(),
-      };
-      if (Object.keys(action.files).length) {
-        state.files = {
-          ...(state.files !== null ? { ...state.files } : {}),
-          ...action.files,
-        };
-      }
+      state = updateDeviceState(state, action.dongleId, (device) => ({
+        ...device,
+        filesUploading: action.uploading,
+        filesUploadingMeta: { dongleId: action.dongleId, fetchedAt: Date.now() },
+        files: Object.keys(action.files).length ? { ...device.files, ...action.files } : device.files,
+      }));
       break;
     case Types.ACTION_FILES_CANCELLED_UPLOADS:
-      if (state.files) {
-        const cancelFileNames = Object.keys(state.filesUploading)
+      state = updateDeviceState(state, action.dongleId, (device) => {
+        const cancelFileNames = Object.keys(device.filesUploading)
           .filter((id) => action.ids.includes(id))
-          .map((id) => state.filesUploading[id].fileName);
-        state.files = Object.keys(state.files)
-          .filter((fileName) => !cancelFileNames.includes(fileName))
-          .reduce((obj, fileName) => { obj[fileName] = state.files[fileName]; return obj; }, {});
-      }
-      state.filesUploading = Object.keys(state.filesUploading)
-        .filter((id) => !action.ids.includes(id))
-        .reduce((obj, id) => { obj[id] = state.filesUploading[id]; return obj; }, {});
-      break;
-    case Types.ACTION_ROUTES_METADATA:
-      // merge existing routes' event and location info with new routes
-      state.routes = action.routes.map((route) => {
-        const existingRoute = state.lastRoutes ?
-          state.lastRoutes.find((r) => r.fullname === route.fullname) : {};
+          .map((id) => device.filesUploading[id].fileName);
+        if (!cancelFileNames.length) return device;
         return {
-          ...existingRoute,
-          ...route,
-        }
+          ...device,
+          files: device.files && Object.fromEntries(Object.entries(device.files)
+            .filter(([fileName]) => !cancelFileNames.includes(fileName))),
+          filesUploading: Object.fromEntries(Object.entries(device.filesUploading)
+            .filter(([id]) => !action.ids.includes(id))),
+        };
       });
-      state.routesMeta = {
-        dongleId: action.dongleId,
-        start: action.start,
-        end: action.end,
-      };
-      if (!state.currentRoute && state.selectedRouteId) {
-        const curr = state.routes?.find((route) => route.log_id === state.selectedRouteId);
-        if (curr) {
-          state.currentRoute = {
-            ...curr,
-          };
-          if (!state.zoom) {
-            state.zoom = {
-              start: 0,
-              end: state.currentRoute.duration,
-            };
-          }
-
-          if (!state.loop || !state.loop.startTime || !state.loop.duration) {
-            state.loop = {
-              startTime: state.zoom.start,
-              duration: state.zoom.end - state.zoom.start,
-            };
-          }
+      break;
+    case Types.ACTION_ROUTE_LOAD_STATUS:
+      state.routeLoadStatus = { ...state.routeLoadStatus };
+      if (action.status) state.routeLoadStatus[action.key] = action.status;
+      else delete state.routeLoadStatus[action.key];
+      break;
+    case Types.ACTION_ROUTES_METADATA: {
+      const routeCache = { ...state.routeCache };
+      const revisions = { ...state.routeCacheRevisions };
+      const routeLoadStatus = { ...state.routeLoadStatus };
+      const revision = action.revision ?? 0;
+      action.routes.forEach((route) => {
+        if (revision < (revisions[route.fullname] || 0)) return;
+        const previous = routeCache[route.fullname];
+        const updated = { ...previous, ...route };
+        if (previous && previous.maxqlog !== updated.maxqlog) {
+          delete updated.events;
+          delete updated.driveCoords;
+          delete updated.videoStartOffset;
+        }
+        routeCache[route.fullname] = updated;
+        revisions[route.fullname] = revision;
+        delete routeLoadStatus[route.fullname];
+      });
+      if (action.routeId && action.routes.length === 0) {
+        const fullname = action.dongleId + '|' + action.routeId;
+        if (revision >= (revisions[fullname] || 0)) {
+          routeCache[fullname] = null;
+          revisions[fullname] = revision;
+          delete routeLoadStatus[fullname];
         }
       }
+
+      const activeDevice = action.dongleId === state.dongleId;
+      const deviceState = activeDevice ? state : state.deviceCache[action.dongleId];
+      if (!action.routeId && deviceState && action.limit === deviceState.limit
+          && action.start === deviceState.filter.start && action.end === deviceState.filter.end) {
+        const list = {
+          routes: action.routes.map((route) => routeCache[route.fullname]).filter(Boolean),
+          routesMeta: { dongleId: action.dongleId, start: action.start, end: action.end },
+        };
+        if (activeDevice) Object.assign(state, list);
+        else state.deviceCache = { ...state.deviceCache, [action.dongleId]: { ...deviceState, ...list } };
+      }
+      state.routeCache = routeCache;
+      state.routeCacheRevisions = revisions;
+      state.routeLoadStatus = routeLoadStatus;
+      state.routes = reconcileRouteList(state.routes, routeCache);
+      state.lastRoutes = reconcileRouteList(state.lastRoutes, routeCache);
+      if (activeDevice) state = resolveSelectedRoute(state);
       break;
+    }
     default:
-      return state;
+      return _state;
   }
 
   return state;

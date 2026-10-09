@@ -11,6 +11,7 @@ import Colors from '../../colors';
 import { subscribeWindowSize } from '../../hooks/window';
 import { ErrorOutline, InfoOutline, KeyboardBackspaceIcon, PriorityHighIcon } from '../../icons';
 import { primeNav, primeGetSubscription, analyticsEvent } from '../../actions';
+import { openDialog, closeDialog } from '../../actions/navigation';
 import CommacareBadge, { COMMACARE_URL } from '../CommacareBadge';
 import { otherPrimePlan, primePlanName } from './primePlans';
 
@@ -224,9 +225,7 @@ export class PrimeManage extends Component {
     this.state = {
       error: null,
       cancelError: null,
-      cancelModal: false,
       canceling: false,
-      planSwitchModal: false,
       planSwitchStatus: 'confirm',
       planSwitchMessage: null,
       planSwitchTarget: null,
@@ -240,19 +239,24 @@ export class PrimeManage extends Component {
     this.gotoUpdate = this.gotoUpdate.bind(this);
     this.switchPlan = this.switchPlan.bind(this);
     this.fetchSubscription = this.fetchSubscription.bind(this);
+    this.closePlanDialog = this.closePlanDialog.bind(this);
   }
 
   componentDidMount() {
+    this.mounted = true;
     this.unsubscribeWindowSize = subscribeWindowSize(({ width }) => {
       this.setState({ windowWidth: width });
     });
     this.componentDidUpdate({}, {});
-    this.mounted = true;
   }
 
   componentDidUpdate(prevProps, prevState) {
-    const { subscription } = this.props;
+    const { subscription, dialog } = this.props;
     const { stripeStatus } = this.state;
+
+    if (dialog !== prevProps.dialog && dialog === 'change-plan' && !this.state.switchingPlan) {
+      this.setState({ planSwitchStatus: 'confirm', planSwitchMessage: null, planSwitchTarget: null });
+    }
 
     if (!prevProps.stripeSuccess && this.props.stripeSuccess) {
       this.setState({
@@ -310,6 +314,7 @@ export class PrimeManage extends Component {
       error: null,
       planSwitchStatus: 'loading',
       planSwitchMessage: null,
+      planSwitchTarget: plan,
     });
     try {
       const subscribeInfo = plan === 'data' ? await Billing.getSubscribeInfo(dongleId) : null;
@@ -338,6 +343,10 @@ export class PrimeManage extends Component {
         this.setState({ switchingPlan: false });
       }
     }
+  }
+
+  closePlanDialog() {
+    if (!this.state.switchingPlan) this.props.dispatch(closeDialog());
   }
 
   async fetchStripeSession() {
@@ -392,11 +401,12 @@ export class PrimeManage extends Component {
   }
 
   render() {
-    const { dispatch, dongleId, subscription, classes, device } = this.props;
+    const { dispatch, dongleId, subscription, classes, device, dialog } = this.props;
     const { windowWidth, stripeStatus } = this.state;
     const commacare = device?.commacare;
 
     const hasPrimeSub = subscription && subscription.user_id;
+    const planSwitchTarget = this.state.planSwitchTarget || otherPrimePlan(subscription?.plan);
 
     if (!hasPrimeSub && !stripeStatus) {
       return null;
@@ -523,13 +533,7 @@ export class PrimeManage extends Component {
                       <Button
                         className={classes.buttons}
                         style={buttonSmallStyle}
-                        onClick={() => this.setState({
-                          planSwitchModal: true,
-                          planSwitchStatus: 'confirm',
-                          planSwitchMessage: null,
-                          planSwitchTarget: otherPrimePlan(subscription.plan),
-                          error: null,
-                        })}
+                        onClick={() => dispatch(openDialog('change-plan'))}
                         disabled={this.state.switchingPlan}
                       >
                         {this.state.switchingPlan
@@ -542,7 +546,7 @@ export class PrimeManage extends Component {
                       <Button
                         className={`${classes.buttons} ${classes.cancelButton} primeCancel`}
                         style={buttonSmallStyle}
-                        onClick={() => this.setState({ cancelModal: true })}
+                        onClick={() => dispatch(openDialog('cancel-prime'))}
                         disabled={Boolean(!hasPrimeSub)}
                       >
                         Cancel subscription
@@ -578,30 +582,21 @@ export class PrimeManage extends Component {
           </div>
         </div>
         <Modal
-          open={this.state.planSwitchModal}
-          onClose={() => {
-            if (!this.state.switchingPlan) {
-              this.setState({
-                planSwitchModal: false,
-                planSwitchStatus: 'confirm',
-                planSwitchMessage: null,
-                planSwitchTarget: null,
-              });
-            }
-          }}
+          open={Boolean(hasPrimeSub && dialog === 'change-plan')}
+          onClose={this.closePlanDialog}
         >
-          <Paper className="absolute left-1/2 top-[40%] w-[400px] max-w-[90%] -translate-x-1/2 -translate-y-1/2 p-4">
+          <Paper role="dialog" aria-modal="true" aria-labelledby="prime-change-plan-title" className="absolute left-1/2 top-[40%] w-[400px] max-w-[90%] -translate-x-1/2 -translate-y-1/2 p-4">
             {this.state.planSwitchStatus === 'success'
               ? (
                 <>
-                  <Typography variant="title" className="text-white">
-                    {`Welcome to ${primePlanName(this.state.planSwitchTarget)}`}
+                  <Typography id="prime-change-plan-title" variant="title" className="text-white">
+                    {`Welcome to ${primePlanName(planSwitchTarget)}`}
                   </Typography>
                   <div className="mt-4 rounded-lg bg-green-500/20 p-3 text-green-100">
                     <Typography>{this.state.planSwitchMessage}</Typography>
                   </div>
                   <Typography className="mt-3 text-white/80">
-                    {this.state.planSwitchTarget === 'data'
+                    {planSwitchTarget === 'data'
                       ? 'Your plan now includes data for $24/month.'
                       : 'Your plan no longer includes data and costs $14/month.'}
                   </Typography>
@@ -609,12 +604,7 @@ export class PrimeManage extends Component {
                     <Button
                       variant="contained"
                       className={classes.closeButton}
-                      onClick={() => this.setState({
-                        planSwitchModal: false,
-                        planSwitchStatus: 'confirm',
-                        planSwitchMessage: null,
-                        planSwitchTarget: null,
-                      })}
+                      onClick={this.closePlanDialog}
                     >
                       Done
                     </Button>
@@ -623,11 +613,11 @@ export class PrimeManage extends Component {
               )
               : (
                 <>
-                  <Typography variant="title" className="text-white">
-                    {`Switch to ${primePlanName(this.state.planSwitchTarget)} plan`}
+                  <Typography id="prime-change-plan-title" variant="title" className="text-white">
+                    {`Switch to ${primePlanName(planSwitchTarget)} plan`}
                   </Typography>
                   <Typography className="mt-3 text-white/80">
-                    {this.state.planSwitchTarget === 'data'
+                    {planSwitchTarget === 'data'
                       ? (
                         <>
                           The Standard plan costs $24/month, includes a data plan, and is
@@ -656,19 +646,14 @@ export class PrimeManage extends Component {
                   variant="contained"
                   className={classes.cancelModalButton}
                   onClick={this.switchPlan}
-                  disabled={this.state.switchingPlan}
+                  disabled={this.state.switchingPlan || !hasPrimeSub || hasCancelAt}
                 >
                   {this.state.planSwitchStatus === 'error' ? 'Try again' : 'Confirm switch'}
                 </Button>
                 <Button
                   variant="contained"
                   className={classes.closeButton}
-                  onClick={() => this.setState({
-                    planSwitchModal: false,
-                    planSwitchStatus: 'confirm',
-                    planSwitchMessage: null,
-                    planSwitchTarget: null,
-                  })}
+                  onClick={this.closePlanDialog}
                   disabled={this.state.switchingPlan}
                 >
                   Cancel
@@ -678,11 +663,11 @@ export class PrimeManage extends Component {
           </Paper>
         </Modal>
         <Modal
-          open={this.state.cancelModal}
-          onClose={() => this.setState({ cancelModal: false })}
+          open={Boolean(hasPrimeSub && dialog === 'cancel-prime')}
+          onClose={() => dispatch(closeDialog())}
         >
-          <Paper className={classes.modal}>
-            <Typography variant="title">Cancel prime subscription</Typography>
+          <Paper role="dialog" aria-modal="true" aria-labelledby="prime-cancel-title" className={classes.modal}>
+            <Typography id="prime-cancel-title" variant="title">Cancel prime subscription</Typography>
             {this.state.cancelError && (
               <div className={classes.cancelError}>
                 <Typography>{this.state.cancelError}</Typography>
@@ -717,7 +702,7 @@ export class PrimeManage extends Component {
               variant="contained"
               className={`${classes.cancelModalButton} primeModalCancel`}
               onClick={this.cancelPrime}
-              disabled={Boolean(this.state.cancelSuccess || this.state.canceling)}
+              disabled={Boolean(!hasPrimeSub || hasCancelAt || this.state.cancelSuccess || this.state.canceling)}
             >
               {this.state.canceling
                 ? <CircularProgress size={19} style={{ color: Colors.white }} />
@@ -726,7 +711,7 @@ export class PrimeManage extends Component {
             <Button
               variant="contained"
               className={`${classes.closeButton} primeModalClose`}
-              onClick={() => this.setState({ cancelModal: false })}
+              onClick={() => dispatch(closeDialog())}
             >
               Close
             </Button>
@@ -741,6 +726,7 @@ const stateToProps = (state) => ({
   dongleId: state.dongleId,
   device: state.device,
   subscription: state.subscription,
+  dialog: state.navigation.dialog,
 });
 
 export default connect(stateToProps)(withStyles(styles)(PrimeManage));

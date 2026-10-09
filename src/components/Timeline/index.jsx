@@ -125,9 +125,11 @@ const styles = () => ({
     backgroundColor: Colors.grey800,
     color: Colors.white,
     position: 'absolute',
-    top: 83,
+    bottom: 10,
     left: 0,
     width: 80,
+    maxWidth: '100%',
+    pointerEvents: 'none',
   },
 });
 
@@ -254,11 +256,11 @@ class Timeline extends Component {
 
     document.removeEventListener('pointerup', this.handlePointerUp);
     document.removeEventListener('pointermove', this.handlePointerMove);
-    const { dragging } = this.state;
+    const { dragging, hoverX } = this.state;
     if (!dragging) {
       return;
     }
-    this.setState({ dragging: null });
+    this.setState({ dragging: null, hoverX: ev.pointerType === 'touch' ? null : hoverX });
 
     const rulerBounds = this.rulerRef.current.getBoundingClientRect();
     const startPercent = (Math.min(dragging[0], dragging[1]) - rulerBounds.x) / rulerBounds.width;
@@ -275,7 +277,7 @@ class Timeline extends Component {
       const startTime = startOffset;
       const endTime = endOffset;
 
-      dispatch(pushTimelineRange(route.log_id, startTime, endTime, true));
+      dispatch(pushTimelineRange(route.log_id, startTime, endTime));
     } else if (ev.currentTarget !== document) {
       this.handleClick(ev);
     }
@@ -390,7 +392,7 @@ class Timeline extends Component {
       hoverStyle;
     if (rulerBounds && hoverX) {
       const hoverOffset = this.percentToOffset((hoverX - rulerBounds.x) / rulerBounds.width);
-      hoverStyle = { left: Math.max(-10, Math.min(rulerBounds.width - 70, hoverX - rulerBounds.x - 40)) };
+      hoverStyle = { left: Math.max(0, Math.min(rulerBounds.width - 80, hoverX - rulerBounds.x - 40)) };
       if (!Number.isNaN(hoverOffset)) {
         hoverString = dayjs(route.start_time_utc_millis + hoverOffset).format('HH:mm:ss');
         const segNum = this.segmentNum(hoverOffset);
@@ -445,7 +447,7 @@ class Timeline extends Component {
                 { draggerStyle && <div ref={this.dragBar} className={classes.dragHighlight} style={draggerStyle} /> }
               </div>
               { hoverString && (
-                <div ref={this.hoverBead} className={classes.hoverBead} style={hoverStyle}>
+                <div ref={this.hoverBead} data-testid="timeline-hover-badge" className={classes.hoverBead} style={hoverStyle}>
                   { hoverString }
                 </div>
               ) }

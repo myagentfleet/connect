@@ -1,4 +1,4 @@
-/* eslint-disable no-await-in-loop -- captures are intentionally serialized in one browser */
+/* eslint-disable no-await-in-loop -- each worker captures isolated browser contexts sequentially */
 import { execFile } from 'node:child_process';
 import {
   access, cp, mkdir, mkdtemp, readFile, rm, writeFile,
@@ -12,6 +12,7 @@ import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
 import puppeteer from 'puppeteer';
 import { build, preview } from 'vite';
+import { verifyClipPlayback, verifyPlaybackControls } from './gallery-checks.mjs';
 
 const ROUTE_NAME = '5beb9b58bd12b691|0000010a--a51155e496';
 const [DONGLE_ID, LOG_ID] = ROUTE_NAME.split('|');
@@ -21,15 +22,23 @@ const LOCALE = 'en-US';
 const TIMEZONE = 'America/Los_Angeles';
 const CHANGE_THRESHOLD = 0.0001;
 const CAPTURE_CONCURRENCY = 4;
+const CLIP_FILENAME = 'coastal-drive.mp4';
+const CLIP_ROUTE_PATH = `/${DONGLE_ID}/${LOG_ID}/10/30`;
 
 const GALLERY_STATES = [
   { name: 'signin', label: 'Sign in', path: '/', readyText: 'Sign in with Google', anonymous: true },
   { name: 'pair', label: 'Pair a device', path: '/', readyText: 'add new device' },
   { name: 'dashboard', label: 'Dashboard', path: `/${DONGLE_ID}`, readyText: 'Bronco Sport' },
   { name: 'drive', label: 'Drive', path: `/${DONGLE_ID}/${LOG_ID}`, readySelector: '.DriveView' },
+  {
+    name: 'drive-clips-toolbar', label: 'Drive with clip controls', page: 'drive',
+    path: `/${DONGLE_ID}/${LOG_ID}`, clips: true, newUrlState: true,
+    readySelector: '.DriveMediaToolbar [aria-haspopup="true"]',
+  },
   { name: 'checkout', label: 'Prime checkout', path: `/${DONGLE_ID}/prime`, readyText: '24/7 connectivity' },
   { name: 'management', label: 'Prime management', path: `/${DONGLE_ID}/prime`, readyText: 'Next payment' },
   { name: 'teleop', label: 'Teleop', path: `/${DONGLE_ID}/stream`, readyText: 'comma body' },
+  { name: 'referrals', label: 'Referrals', path: '/referrals', readyText: 'claim rewards ($50)' },
   {
     name: 'pair-device-modal',
     label: 'Pair device modal',
@@ -97,14 +106,120 @@ const GALLERY_STATES = [
     pairToken: 'eyJhbGciOiJub25lIn0.eyJpZGVudGl0eSI6ImdhbGxlcnkifQ.',
     modalText: 'Pairing device',
   },
+  {
+    name: 'downloads-url',
+    label: 'Downloads (direct link)',
+    page: 'drive',
+    path: `/${DONGLE_ID}/${LOG_ID}?dialog=downloads`,
+    newUrlState: true,
+    readyText: 'View upload queue',
+    modalText: 'All logs',
+  },
+  {
+    name: 'route-info-url',
+    label: 'Route information (direct link)',
+    page: 'drive',
+    path: `/${DONGLE_ID}/${LOG_ID}?dialog=route-info`,
+    newUrlState: true,
+    readyText: 'Public access',
+    modalText: 'Preserved',
+  },
+  {
+    name: 'device-clips-url',
+    label: 'Device clips (direct link)',
+    page: 'dashboard',
+    path: `/${DONGLE_ID}?dialog=clips`,
+    clips: true,
+    newUrlState: true,
+    readyText: 'coastal-drive',
+    modalText: 'CLIPS ON THIS DEVICE',
+  },
+  {
+    name: 'clips-menu-url',
+    label: 'Clips menu (direct link)',
+    page: 'drive',
+    path: `${CLIP_ROUTE_PATH}?dialog=clips`,
+    clips: true,
+    newUrlState: true,
+    readyText: 'coastal-drive',
+    modalText: 'CLIPS ON THIS DEVICE',
+  },
+  {
+    name: 'clip-viewer-loading-url',
+    label: 'Clip viewer (download pending)',
+    page: 'drive',
+    path: `${CLIP_ROUTE_PATH}?dialog=clip&clip=${CLIP_FILENAME}`,
+    clips: true,
+    newUrlState: true,
+    readyText: 'Downloading · 0%',
+    modalText: 'Downloading · 0%',
+  },
+  {
+    name: 'clip-viewer-ready-url',
+    label: 'Clip viewer (playback and seek verified)',
+    page: 'drive',
+    path: `${CLIP_ROUTE_PATH}?dialog=clip&clip=${CLIP_FILENAME}`,
+    clips: true,
+    clipPlayback: true,
+    newUrlState: true,
+    readySelector: '[role="dialog"] video',
+    modalText: 'coastal-drive',
+  },
+  {
+    name: 'clip-viewer-missing-url',
+    label: 'Missing clip (direct link)',
+    page: 'drive',
+    path: `${CLIP_ROUTE_PATH}?dialog=clip&clip=missing-clip.mp4`,
+    clips: true,
+    newUrlState: true,
+    readyText: 'Clip not found on this device.',
+    modalText: 'Clip not found on this device.',
+  },
+  {
+    name: 'delete-clip-url',
+    label: 'Delete clip confirmation (direct link)',
+    page: 'drive',
+    path: `${CLIP_ROUTE_PATH}?dialog=delete-clip&clip=${CLIP_FILENAME}`,
+    clips: true,
+    newUrlState: true,
+    readySelector: '[role="dialog"] button:last-child:not([disabled])',
+    modalText: 'Delete clip?',
+  },
+  {
+    name: 'cancel-prime-unavailable-url',
+    label: 'Cancel prime without a subscription (direct link)',
+    page: 'checkout',
+    path: `/${DONGLE_ID}/prime?dialog=cancel-prime`,
+    newUrlState: true,
+    readyText: 'This device does not have a prime subscription to manage.',
+    modalText: 'This device does not have a prime subscription to manage.',
+  },
+  {
+    name: 'change-plan-unavailable-url',
+    label: 'Change plan without subscription details (direct link)',
+    page: 'management',
+    path: `/${DONGLE_ID}/prime?dialog=change-plan`,
+    missingSubscription: true,
+    newUrlState: true,
+    readyText: 'Subscription details are not available yet. Please try again later.',
+    modalText: 'Subscription details are not available yet. Please try again later.',
+  },
 ];
 
 const GALLERY_VIEWPORTS = [
   { name: 'desktop', width: 1280, height: 800 },
   { name: 'mobile', width: 390, height: 844 },
+  { name: 'narrow', width: 320, height: 700, states: ['drive', 'drive-clips-toolbar'] },
+  { name: 'compact-401', width: 401, height: 844, states: ['drive', 'drive-clips-toolbar'] },
+  { name: 'compact-450', width: 450, height: 844, states: ['drive', 'drive-clips-toolbar'] },
+  { name: 'wide', width: 1536, height: 960, states: ['drive'] },
 ];
 
 const execute = promisify(execFile);
+
+function viewportsForState(state) {
+  return GALLERY_VIEWPORTS.filter((viewport) => !viewport.states || viewport.states.includes(state.name));
+}
 
 function parseArgs(argv) {
   const values = {};
@@ -151,7 +266,7 @@ async function downloadBaseline(baselineUrl, destination) {
   }
 
   await mkdir(destination, { recursive: true });
-  const downloads = GALLERY_STATES.flatMap((state) => GALLERY_VIEWPORTS.map(async (viewport) => {
+  const downloads = GALLERY_STATES.flatMap((state) => viewportsForState(state).map(async (viewport) => {
     const capture = manifest.captures.find((item) => (
       item.state === state.name && item.viewport === viewport.name
     ));
@@ -178,17 +293,20 @@ async function downloadBaseline(baselineUrl, destination) {
 }
 
 async function fetchFixtures() {
+  const startedAt = performance.now();
   const routeUrl = `https://api.commadotai.com/v1/route/${encodeURIComponent(ROUTE_NAME)}/`;
   const route = await (await getResponse(routeUrl)).json();
   const assetRoot = new URL(route.url);
   if (assetRoot.protocol !== 'https:') throw new Error(`Expected an HTTPS route asset URL, got ${route.url}`);
   const assetRootUrl = assetRoot.href.replace(/\/$/, '');
-  const segmentEvents = await Promise.all(
-    Array.from({ length: route.maxqlog + 1 }, async (_, segment) => (
+  const [segmentEvents, sprite, clip] = await Promise.all([
+    Promise.all(Array.from({ length: route.maxqlog + 1 }, async (_, segment) => (
       (await getResponse(`${assetRootUrl}/${segment}/events.json`)).json()
-    )),
-  );
-  const sprite = await getResponse(`${assetRootUrl}/0/sprite.jpg`);
+    ))),
+    getResponse(`${assetRootUrl}/0/sprite.jpg`).then((response) => response.arrayBuffer()),
+    readFile(new URL('./fixtures/gallery-test-pattern.mp4', import.meta.url)),
+  ]);
+  console.log(`Prepared route fixtures in ${Math.round(performance.now() - startedAt)} ms`);
   return {
     events: segmentEvents.map((events) => events.map((event) => ({
       ...event,
@@ -199,7 +317,8 @@ async function fetchFixtures() {
           : event.data?.alertStatus,
       },
     }))),
-    sprite: Buffer.from(await sprite.arrayBuffer()),
+    sprite: Buffer.from(sprite),
+    clip,
   };
 }
 
@@ -306,7 +425,7 @@ function jsonResponse(request, value, status = 200) {
   });
 }
 
-async function mockGalleryRequest(request, origin, pageName, fixtures) {
+async function mockGalleryRequest(request, origin, pageName, fixtures, state) {
   const url = new URL(request.url());
   if (url.origin === origin) {
     const eventsMatch = url.pathname.match(/^\/__gallery-route\/(\d+)\/events\.json$/);
@@ -353,6 +472,10 @@ async function mockGalleryRequest(request, origin, pageName, fixtures) {
   }
 
   const data = galleryData(origin, pageName);
+  if (state.clips) {
+    data.device.version = '0.11.2';
+    data.device.openpilot_version = '0.11.2';
+  }
   const path = decodeURIComponent(url.pathname).replace(/\/$/, '');
   if (url.hostname === 'api.comma.ai') {
     if (path === '/v1/me') return jsonResponse(request, data.profile);
@@ -371,6 +494,7 @@ async function mockGalleryRequest(request, origin, pageName, fixtures) {
     }
     if (path === `/v1/devices/${DONGLE_ID}/routes_segments`) return jsonResponse(request, [data.route]);
     if (path === `/v1/devices/${DONGLE_ID}/routes/preserved`) return jsonResponse(request, [data.route]);
+    if (path === `/v1/devices/${DONGLE_ID}/athena_offline_queue`) return jsonResponse(request, []);
     if (path === `/v1/route/${ROUTE_NAME}/files`) return jsonResponse(request, {});
     if (path === `/v1/route/${ROUTE_NAME}/qcamera.m3u8`) {
       return request.respond({
@@ -384,11 +508,58 @@ async function mockGalleryRequest(request, origin, pageName, fixtures) {
     if (path === '/v2/pilotpair') return undefined;
   }
   if (url.hostname === 'billing.comma.ai') {
+    if (path === '/v1/referrals') {
+      return jsonResponse(request, {
+        code: 'GALLERY',
+        cash: { available: 50, claimed: 50, pending: 50 },
+        referrals: [{ ordered_at: Math.floor(FIXED_TIMESTAMP / 1000) - (86400 * 60), status: 'available' }],
+      });
+    }
     if (path === '/v1/prime/subscribe_info') return jsonResponse(request, data.subscribeInfo);
-    if (path === '/v1/prime/subscription') return jsonResponse(request, data.subscription);
+    if (path === '/v1/prime/subscription') {
+      return jsonResponse(request, state.missingSubscription ? null : data.subscription);
+    }
   }
   if (url.hostname === 'athena.comma.ai' && path === `/${DONGLE_ID}`) {
     const payload = JSON.parse(request.postData() || '{}');
+    if (state.clips) {
+      if (payload.method === 'getVersion') {
+        return jsonResponse(request, { result: { commit_date: Math.floor(FIXED_TIMESTAMP / 1000) } });
+      }
+      if (payload.method === 'getClipState') {
+        return jsonResponse(request, { result: {
+          clips: [{
+            filename: CLIP_FILENAME,
+            status: 'ready',
+            requested_at: Math.floor(FIXED_TIMESTAMP / 1000) - 60,
+            route: LOG_ID,
+            camera: 'fcamera.hevc',
+            source_start_time: 10,
+            source_end_time: state.clipPlayback ? 12 : 30,
+            speedup: 1,
+            size: state.clipPlayback ? fixtures.clip.length : 2 * 1024 * 1024,
+          }],
+          cameras: Object.fromEntries(['fcamera.hevc', 'ecamera.hevc', 'dcamera.hevc']
+            .map((camera) => [camera, { available_ranges: [[0, 60]] }])),
+        } });
+      }
+      if (payload.method === 'getClipChunk') {
+        // Keep the pending state separate from the real decoder/seek check.
+        if (!state.clipPlayback) return undefined;
+        const { filename, offset } = payload.params;
+        if (filename !== CLIP_FILENAME || !Number.isSafeInteger(offset) || offset < 0 || offset >= fixtures.clip.length) {
+          throw new Error(`Invalid clip chunk request in ${state.name}`);
+        }
+        return jsonResponse(request, { result: {
+          size: fixtures.clip.length,
+          offset,
+          data: fixtures.clip.subarray(offset, offset + 4096).toString('base64'),
+        } });
+      }
+      if (['createClip', 'deleteClip'].includes(payload.method)) {
+        throw new Error(`Unexpected clip mutation in ${state.name}: ${payload.method}`);
+      }
+    }
     if (payload.method === 'getMessage') {
       return jsonResponse(request, { result: { peripheralState: { voltage: 12300 } } });
     }
@@ -532,19 +703,20 @@ async function openGalleryModal(page, state, label) {
   for (const action of state.actions ?? []) await clickGalleryAction(page, action, label);
   if (!state.modalText) return;
   await page.waitForFunction((expected) => {
-    return Array.from(document.querySelectorAll('[role="document"]'))
+    return Array.from(document.querySelectorAll('[role="dialog"], [role="document"]'))
       .some((element) => globalThis.galleryVisible(element) && element.textContent.includes(expected));
   }, { timeout: 5000 }, state.modalText).catch((error) => {
     throw new Error(`${label}: modal containing ${JSON.stringify(state.modalText)} did not open`, { cause: error });
   });
 }
 
-async function captureOne(browser, origin, outputPath, state, viewport, fixtures) {
+async function captureOne(browser, origin, outputPath, state, viewport, fixtures, verifyCurrent) {
   const context = await browser.createBrowserContext();
-  const page = await context.newPage();
   const failures = [];
   const pageState = GALLERY_STATES.find(({ name }) => name === (state.page ?? state.name));
+  const readyState = state.readySelector || state.readyText ? state : pageState;
   try {
+    const page = await context.newPage();
     await page.setViewport({ width: viewport.width, height: viewport.height, deviceScaleFactor: 1 });
     await page.emulateTimezone(TIMEZONE);
     await page.emulateMediaFeatures([
@@ -553,12 +725,14 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
     ]);
     await page.evaluateOnNewDocument((timestamp, authenticated) => {
       const NativeDate = Date;
-      class FrozenDate extends NativeDate {
-        constructor(...args) { super(...(args.length === 0 ? [timestamp] : args)); }
-        static now() { return timestamp; }
+      const clockStartedAt = performance.now();
+      // Keep the calendar reproducible while letting debounce timers measure elapsed time.
+      class GalleryDate extends NativeDate {
+        constructor(...args) { super(...(args.length === 0 ? [GalleryDate.now()] : args)); }
+        static now() { return timestamp + Math.floor(performance.now() - clockStartedAt); }
       }
-      Object.setPrototypeOf(FrozenDate, NativeDate);
-      globalThis.Date = FrozenDate;
+      Object.setPrototypeOf(GalleryDate, NativeDate);
+      globalThis.Date = GalleryDate;
       if (authenticated) localStorage.setItem('authorization', 'gallery-token');
       else localStorage.removeItem('authorization');
       localStorage.removeItem('selectedDongleId');
@@ -638,7 +812,7 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
         request.continue();
         return;
       }
-      mockGalleryRequest(request, origin, pageState.name, fixtures).catch((error) => {
+      mockGalleryRequest(request, origin, pageState.name, fixtures, state).catch((error) => {
         failures.push(`request error: ${error.message}`);
         if (!request.isInterceptResolutionHandled()) request.abort('failed').catch(() => {});
       });
@@ -659,7 +833,7 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
       }
     });
 
-    await page.goto(`${origin}${pageState.path}`, {
+    await page.goto(`${origin}${state.path ?? pageState.path}`, {
       waitUntil: 'domcontentloaded',
       timeout: 15000,
     });
@@ -669,7 +843,7 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
         return expectedText && document.body.innerText.includes(expectedText);
       },
       { timeout: 15000 },
-      { selector: pageState.readySelector, expectedText: pageState.readyText },
+      { selector: readyState.readySelector, expectedText: readyState.readyText },
     );
     await page.evaluate(async () => {
       if (document.fonts) await document.fonts.ready;
@@ -696,6 +870,8 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
     ` });
     const label = `${state.name}/${viewport.name}`;
     await openGalleryModal(page, state, label);
+    if (verifyCurrent && ['drive', 'drive-clips-toolbar'].includes(state.name)) await verifyPlaybackControls(page, label);
+    if (state.clipPlayback) await verifyClipPlayback(page, label);
     const buffer = await waitForStableFrames(page, label);
     if (failures.length) throw new Error(`${label}: ${failures.join('; ')}`);
     assertNotBlank(buffer, label);
@@ -705,39 +881,46 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
   }
 }
 
-async function captureRenderers(renderers, output, fixtures) {
-  await rm(output, { recursive: true, force: true });
+async function launchGalleryBrowser() {
+  const startedAt = performance.now();
+  const browser = await puppeteer.launch({
+    headless: 'shell',
+    env: { ...process.env, LANG: `${LOCALE}.UTF-8`, LC_ALL: `${LOCALE}.UTF-8`, TZ: TIMEZONE },
+    args: [
+      '--disable-background-networking',
+      '--disable-default-apps',
+      '--disable-setuid-sandbox',
+      '--disable-sync',
+      '--force-color-profile=srgb',
+      `--lang=${LOCALE}`,
+      '--no-sandbox',
+    ],
+  });
+  console.log(`Started gallery browser in ${Math.round(performance.now() - startedAt)} ms`);
+  return browser;
+}
+
+async function captureRenderers(browser, renderers, output, fixtures) {
+  // main gives each run a fresh temporary directory, including any downloaded baseline.
   await mkdir(output, { recursive: true });
   for (const renderer of renderers) {
     const server = await serveDirectory(renderer.directory);
-    let browser;
     try {
-      browser = await puppeteer.launch({
-        headless: 'shell',
-        env: { ...process.env, LANG: `${LOCALE}.UTF-8`, LC_ALL: `${LOCALE}.UTF-8`, TZ: TIMEZONE },
-        args: [
-          '--disable-background-networking',
-          '--disable-default-apps',
-          '--disable-setuid-sandbox',
-          '--disable-sync',
-          '--force-color-profile=srgb',
-          `--lang=${LOCALE}`,
-          '--no-sandbox',
-        ],
-      });
       const destination = resolve(output, renderer.name);
       await mkdir(destination, { recursive: true });
-      const pending = GALLERY_STATES.flatMap((state) => GALLERY_VIEWPORTS.map((viewport) => ({ state, viewport })));
+      // A local pre-change checkout does not implement the new direct-link states.
+      // Every current capture remains required; unavailable baselines are labeled in the report.
+      const states = renderer.name === 'base' ? GALLERY_STATES.filter((state) => !state.newUrlState) : GALLERY_STATES;
+      const pending = states.flatMap((state) => viewportsForState(state).map((viewport) => ({ state, viewport })));
       await Promise.all(Array.from({ length: CAPTURE_CONCURRENCY }, async () => {
         while (pending.length) {
           const { state, viewport } = pending.shift();
           const filename = captureFilename(state.name, viewport.name);
-          await captureOne(browser, server.origin, resolve(destination, filename), state, viewport, fixtures);
+          await captureOne(browser, server.origin, resolve(destination, filename), state, viewport, fixtures, renderer.name === 'current');
           console.log(`Captured ${renderer.name}/${filename}`);
         }
       }));
     } finally {
-      if (browser) await browser.close();
       await server.close();
     }
   }
@@ -891,7 +1074,7 @@ async function buildReport(captures, output, headSha, baseSha, baselineUrl, arti
 
   const results = [];
   for (const state of GALLERY_STATES) {
-    for (const viewport of GALLERY_VIEWPORTS) {
+    for (const viewport of viewportsForState(state)) {
       const filename = captureFilename(state.name, viewport.name);
       const currentSource = resolve(currentDirectory, filename);
       const currentAsset = `./connect-gallery-assets/current/${filename}`;
@@ -960,23 +1143,24 @@ async function main() {
   }
   if (baseSource && baselineUrl) throw new Error('--base and --baseline-url are mutually exclusive');
   const temporary = await mkdtemp(resolve(tmpdir(), 'connect-gallery-'));
+  const browserPromise = launchGalleryBrowser();
   try {
     const output = resolve(args.output ?? 'dist-gallery');
     const currentRenderer = output;
     const baseRenderer = resolve(temporary, 'renderer-base');
     const captures = resolve(temporary, 'captures');
-    const fixtures = await fetchFixtures();
-    await buildRenderer(source, currentRenderer);
+    const [fixtures, baseSha, , browser] = await Promise.all([
+      fetchFixtures(),
+      baselineUrl ? downloadBaseline(baselineUrl, resolve(captures, 'base')) : args['base-sha'],
+      buildRenderer(source, currentRenderer),
+      browserPromise,
+    ]);
     const renderers = [{ name: 'current', directory: currentRenderer }];
     if (baseSource) {
       await buildRenderer(baseSource, baseRenderer);
       renderers.unshift({ name: 'base', directory: baseRenderer });
     }
-    await captureRenderers(renderers, captures, fixtures);
-    let baseSha = args['base-sha'];
-    if (baselineUrl) {
-      baseSha = await downloadBaseline(baselineUrl, resolve(captures, 'base'));
-    }
+    await captureRenderers(browser, renderers, captures, fixtures);
     await buildReport(
       captures,
       output,
@@ -986,7 +1170,12 @@ async function main() {
       args['artifact-output'] ? resolve(args['artifact-output']) : null,
     );
   } finally {
-    await rm(temporary, { recursive: true, force: true });
+    try {
+      const browser = await browserPromise.catch(() => null);
+      if (browser) await browser.close();
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
   }
 }
 
