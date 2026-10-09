@@ -13,6 +13,9 @@ const output = resolve(process.env.QA769_OUTPUT || 'qa769-platform-results');
 const fixtures = resolve(process.env.QA769_FIXTURES || 'public/demo-video');
 const engine = process.env.QA769_ENGINE || 'firefox';
 const nativeProfile = process.env.QA769_NATIVE_PROFILE === 'true';
+const traceCommands = process.env.QA769_TRACE_COMMANDS === 'true';
+const buildOnly = process.env.QA769_BUILD_ONLY === 'true';
+const existingDist = process.env.QA769_APP_DIST && resolve(process.env.QA769_APP_DIST);
 const caseFilter = process.env.QA769_CASE || null;
 const requestedCases = caseFilter?.split(',').map((name) => name.trim()).filter(Boolean);
 const VIDEO = '.DriveView video';
@@ -24,6 +27,7 @@ const ids = { complete: 11, first: 12, middle: 13 };
 const link = (kind) => `.DriveEntry[href="/deadbeefdeadbeef/00000000--${String(ids[kind]).padStart(10, '0')}"]`;
 const report = {
   started: new Date().toISOString(), engine, nativeProfile, caseFilter, hostOS: process.platform,
+  traceCommands, buildOnly, existingDist: existingDist || null,
   acceptanceRun: process.env.QA769_DIAGNOSTIC_ONLY !== 'true',
   scope: 'Production build, Playwright-patched browser engine, real media decoding and native media clock. Application cases use UI controls; the explicitly labeled plain-video reference uses scripted native media commands without application code.',
   profile: nativeProfile ? 'macOS WebKit with Playwright iPhone 13 emulation; requires native HLS. This is not physical iOS or branded Safari.' : 'Unmodified desktop browser capabilities; application selects its normal transport.',
@@ -221,8 +225,37 @@ async function main() {
       respond(req, res, bytes, 200, contentType(file));
     });
   } };
-  await build({ mode: 'production', build: { outDir: resolve(output, 'app'), sourcemap: false } });
-  const server = await preview({ configFile: false, plugins: [fixturePlugin], build: { outDir: resolve(output, 'app') },
+  const appDist = existingDist || resolve(output, 'app');
+  if (!existingDist || buildOnly) {
+    const transforms = [];
+    const tracePlugin = { name: 'qa769-diagnostic-command-trace', enforce: 'pre', transform(code, id) {
+      if (!id.replaceAll('\\', '/').endsWith('/src/components/DriveVideo/stream.js')) return;
+      const entry = 'export function openStream(video, url, { onError, onAudio, startPosition = 0 }) {';
+      const errorHandler = 'hls.on(Hls.Events.ERROR, (_event, error) => {';
+      assert.ok(code.includes(entry), 'The diagnostic hook matches the reviewed stream entry');
+      assert.ok(code.includes(errorHandler), 'The diagnostic hook matches the existing HLS error listener');
+      assert.equal(code.split('hls.startLoad(position)').length - 1, 2, 'Exactly two reviewed HLS loading calls are traced');
+      const transformed = code.replace(entry, `${entry}\n  globalThis.qaCommandTrace?.push({ type: 'openStream', at: performance.now(), startPosition, url });`)
+        .replaceAll('hls.startLoad(position)', "hls.startLoad((globalThis.qaCommandTrace?.push({ type: 'hls.startLoad', at: performance.now(), position }), position))")
+        .replace(errorHandler, `${errorHandler} globalThis.qaHlsErrors?.push({ at: performance.now(), type: error.type, details: error.details, fatal: error.fatal, reason: error.reason });`);
+      transforms.push({ file: 'src/components/DriveVideo/stream.js',
+        originalSha256: createHash('sha256').update(code).digest('hex'),
+        transformedSha256: createHash('sha256').update(transformed).digest('hex'),
+        description: 'Diagnostic build only: record openStream/startLoad arguments and existing HLS error events; preserve return values, loading commands and error handling.' });
+      return { code: transformed, map: null };
+    } };
+    await build({ mode: 'production', plugins: traceCommands ? [tracePlugin] : [], build: { outDir: appDist, sourcemap: false } });
+    if (traceCommands) assert.equal(transforms.length, 1, 'The intended stream module was instrumented exactly once');
+    report.diagnosticBuildTransforms = transforms;
+    await writeFile(resolve(appDist, 'qa769-build-provenance.json'), JSON.stringify({ sha: report.sha, traceCommands, transforms }, null, 2));
+  }
+  if (existingDist) {
+    report.buildProvenance = JSON.parse(await readFile(resolve(appDist, 'qa769-build-provenance.json'), 'utf8'));
+    assert.equal(report.buildProvenance.sha, report.sha, 'The reused build belongs to this exact application revision');
+    assert.equal(report.buildProvenance.traceCommands, traceCommands, 'The reused build has the declared diagnostic instrumentation');
+  }
+  if (buildOnly) { report.finished = new Date().toISOString(); report.built = true; await save(); return; }
+  const server = await preview({ configFile: false, plugins: [fixturePlugin], build: { outDir: appDist },
     preview: { host: '127.0.0.1', port: 0, strictPort: true } });
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   let browser;
@@ -243,10 +276,35 @@ async function main() {
       page.on('console', (message) => { if (['warning', 'error'].includes(message.type())) result.console.push(message.text()); });
       page.on('requestfailed', (request) => result.requestFailures.push({ url: request.url(), failure: request.failure() }));
       try {
-        await page.addInitScript(() => {
+        await page.addInitScript((traceCommands) => {
           performance.setResourceTimingBufferSize(3000);
           globalThis.qaEvents = []; globalThis.qaFrames = new WeakMap();
           globalThis.qaLastFrame = new WeakMap(); globalThis.qaFrameMetadata = []; let nextId = 0;
+          globalThis.qaCommandTrace = []; globalThis.qaLifecycle = []; globalThis.qaHlsErrors = [];
+          if (traceCommands) {
+            const record = (video, type, value) => {
+              video.dataset.qaVideo ||= String(++nextId);
+              globalThis.qaCommandTrace.push({ type, value, id: video.dataset.qaVideo, at: performance.now(), stack: new Error().stack });
+            };
+            for (const method of ['play', 'pause', 'load']) {
+              const descriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, method);
+              Object.defineProperty(HTMLMediaElement.prototype, method, { ...descriptor, value: function (...args) {
+                record(this, `video.${method}`, args);
+                return Reflect.apply(descriptor.value, this, args);
+              } });
+            }
+            for (const property of ['currentTime', 'playbackRate', 'muted', 'src']) {
+              const descriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, property);
+              Object.defineProperty(HTMLMediaElement.prototype, property, { ...descriptor, set(value) {
+                record(this, `video.${property}=`, value);
+                return Reflect.apply(descriptor.set, this, [value]);
+              } });
+            }
+            const lifecycle = (event) => globalThis.qaLifecycle.push({ type: event?.type || 'init', at: performance.now(),
+              visibility: document.visibilityState, focused: document.hasFocus(), width: innerWidth, height: innerHeight });
+            document.addEventListener('visibilitychange', lifecycle);
+            window.addEventListener('focus', lifecycle); window.addEventListener('blur', lifecycle); lifecycle();
+          }
           const observers = new WeakMap();
           const stopFrames = (video) => {
             const observer = observers.get(video);
@@ -287,7 +345,7 @@ async function main() {
               if (globalThis.qaEvents.length > 3000) globalThis.qaEvents.shift();
             }, true);
           }
-        });
+        }, traceCommands);
         const start = Date.parse('2026-10-09T12:00:00Z');
         const publicRoute = { fullname: PUBLIC_ROUTE, dongle_id: PUBLIC_ROUTE.split('|')[0], url: `${origin}/demo-video`,
           create_time: start / 1000, start_time: new Date(start).toISOString().slice(0, 19), end_time: new Date(start + 180000).toISOString().slice(0, 19),
@@ -338,6 +396,12 @@ async function main() {
       } finally {
         result.mediaEvents = await page.evaluate(() => globalThis.qaEvents).catch(() => []);
         result.frameMetadata = await page.evaluate(() => globalThis.qaFrameMetadata).catch(() => []);
+        if (traceCommands) {
+          result.commandTrace = await page.evaluate(() => globalThis.qaCommandTrace).catch(() => []);
+          result.hlsErrors = await page.evaluate(() => globalThis.qaHlsErrors).catch(() => []);
+          result.pageLifecycle = await page.evaluate(() => globalThis.qaLifecycle).catch(() => []);
+          result.finalPageState = await page.evaluate(() => ({ visibility: document.visibilityState, focused: document.hasFocus() })).catch(() => null);
+        }
         result.finalMedia = await media(page).catch(() => null);
         result.finalText = await page.locator('body').innerText().catch(() => '');
         for (const { req, res } of session.held) respond(req, res, 'BlobNotFound', 404, 'text/plain');
