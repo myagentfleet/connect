@@ -65,12 +65,20 @@ export async function verifyPlaybackControls(page, label) {
     const speed = group.querySelector('select[aria-label="Playback speed"]');
     if (!speed) throw new Error('Playback speed selector is missing');
     const controlBounds = [...buttons, speed].map((control) => control.getBoundingClientRect());
+    const orderedControls = [...controlBounds].sort((first, second) => first.left - second.left);
+    const controlGaps = orderedControls.slice(1).map((control, index) => control.left - orderedControls[index].right);
     const readoutBounds = readout.getBoundingClientRect();
     const controlCentersY = controlBounds.map((rect) => (rect.top + rect.bottom) / 2);
     const controlCentersX = controlBounds.map((rect) => (rect.left + rect.right) / 2).sort((a, b) => a - b);
     const slotSpacing = controlCentersX.slice(1).map((center, index) => center - controlCentersX[index]);
     const containerWidth = group.closest('.PlaybackControlsContainer').getBoundingClientRect().width;
     const compact = containerWidth <= 380;
+    const groupStyle = getComputedStyle(group);
+    const innerControlWidth = bounds.width - parseFloat(groupStyle.paddingLeft) - parseFloat(groupStyle.paddingRight)
+      - parseFloat(groupStyle.borderLeftWidth) - parseFloat(groupStyle.borderRightWidth);
+    const roomForEqualSlots = innerControlWidth >= controlBounds.length * 52 + (controlBounds.length - 1) * 4;
+    const groupCenter = (bounds.left + bounds.right) / 2;
+    const speedBounds = speed.getBoundingClientRect();
     const intersects = (first, second) => first.left < second.right && first.right > second.left
       && first.top < second.bottom && first.bottom > second.top;
     const rowLayout = compact ? (
@@ -88,19 +96,30 @@ export async function verifyPlaybackControls(page, label) {
       compact,
       controlsFit: buttons.length >= 4 && controlBounds.every(within),
       touchTargets: controlBounds.every((rect) => rect.width >= 44 && rect.height >= 44),
+      speedMinimumWidth: speedBounds.width >= 52,
       controlsAligned: Math.max(...controlCentersY) - Math.min(...controlCentersY) <= 1,
       controlsSeparated: controlBounds.every((control, index) => controlBounds.slice(index + 1)
         .every((other) => !intersects(control, other))),
       readoutSeparated: controlBounds.every((control) => !intersects(control, readoutBounds)),
-      evenCompactSlots: !compact || Math.max(...slotSpacing) - Math.min(...slotSpacing) <= 2,
+      symmetricCompactSlots: !compact || (
+        Math.abs((speedBounds.left + speedBounds.right) / 2 - groupCenter) <= 1
+        && controlCentersX.every((center, index) => (
+          Math.abs(center + controlCentersX[controlCentersX.length - 1 - index] - 2 * groupCenter) <= 1
+        ))
+      ),
+      compactMinimumGaps: !compact || controlGaps.every((gap) => gap >= 3.5),
+      evenCompactSlots: !compact || !roomForEqualSlots || Math.max(...slotSpacing) - Math.min(...slotSpacing) <= 2,
+      roomForEqualSlots,
       rowLayout,
       slotSpacing,
+      controlGaps,
       videoFits: Boolean(videoBounds && videoBounds.width > 0 && videoBounds.left >= 0 && videoBounds.right <= innerWidth),
     };
   });
-  if (!result.singleLine || !result.readoutFits || !result.controlsFit || !result.touchTargets
+  if (!result.singleLine || !result.readoutFits || !result.controlsFit || !result.touchTargets || !result.speedMinimumWidth
     || !result.controlsAligned || !result.controlsSeparated || !result.readoutSeparated
-    || !result.evenCompactSlots || !result.rowLayout || !result.videoFits) {
+    || !result.symmetricCompactSlots || !result.compactMinimumGaps || !result.evenCompactSlots
+    || !result.rowLayout || !result.videoFits) {
     throw new Error(`${label}: playback layout is clipped or misaligned: ${JSON.stringify(result)}`);
   }
   console.log(`Verified playback controls for ${label}: ${JSON.stringify(result)}`);
@@ -176,6 +195,8 @@ export async function verifyDriveLayout(page, label) {
       gaps: { timelineToToolbar: toolbar.top - timeline.bottom, toolbarToFrame: frameBounds.top - toolbar.bottom,
         frameToControls: controls.top - frameBounds.bottom },
       controlCenterOffset: (controls.left + controls.right - frameBounds.left - frameBounds.right) / 2,
+      controlsBottomClearance: innerHeight - controls.bottom,
+      desktopControlsFit: innerWidth < 768 || (controls.top >= 0 && controls.bottom <= innerHeight - 16),
       frameHasArea: frameBounds.width > 0 && frameBounds.height > 0,
       badgeWithinRuler: contains(timeline, badge),
       badgeClearsToolbar: !intersects(badge, toolbar),
@@ -205,7 +226,7 @@ export async function verifyDriveLayout(page, label) {
     await checkBadgePosition(0.99),
     await checkBadgePosition(0.5),
   ];
-  if (!result.frameHasArea || !result.badgeWithinRuler || !result.badgeClearsToolbar
+  if (!result.frameHasArea || !result.desktopControlsFit || !result.badgeWithinRuler || !result.badgeClearsToolbar
     || !result.toolbarGroupsFit || !result.toolbarGroupsSeparated
     || !result.badgePositions.every((badge) => badge.withinRuler && badge.clearsToolbar)
     || result.decodedAspect?.matches === false) {

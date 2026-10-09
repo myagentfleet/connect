@@ -20,7 +20,7 @@
 
 @container (max-width: 380px) {
   .PlaybackControls {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(44px, 1fr)) minmax(52px, 1fr) repeat(2, minmax(44px, 1fr));
   }
 
   .PlaybackControls.isIos {
