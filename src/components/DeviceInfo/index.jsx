@@ -154,11 +154,11 @@ class DeviceInfo extends Component {
       snapshot: {},
       windowWidth: window.innerWidth,
       bodyTeleopOpen: false,
-      clipAnchor: null,
       clipsSupported: false,
     };
 
     this.snapshotButtonRef = React.createRef();
+    this.clipButtonRef = React.createRef();
 
     this.onVisible = this.onVisible.bind(this);
     this.fetchDeviceCarHealth = this.fetchDeviceCarHealth.bind(this);
@@ -191,7 +191,6 @@ class DeviceInfo extends Component {
         carHealth: {},
         snapshot: {},
         windowWidth: window.innerWidth,
-        clipAnchor: null,
         clipsSupported: false,
       });
       this.checkClipsSupport();
@@ -336,7 +335,7 @@ class DeviceInfo extends Component {
           dialogClip={this.props.dialogClip}
           dispatch={this.props.dispatch}
           dongleId={this.props.dongleId}
-          anchorEl={this.state.clipAnchor}
+          anchorEl={() => this.clipButtonRef.current}
           onClose={() => this.props.dispatch(closeDialog())}
           routes={this.props.routes}
           deviceOnline={deviceIsOnline(device)}
@@ -415,12 +414,10 @@ class DeviceInfo extends Component {
         >
           <span className="inline-flex">
             <button
+              ref={this.clipButtonRef}
               className={`${classes.button} ${classes.carBattery}`}
               aria-label="Clips"
-              onClick={(event) => {
-                this.setState({ clipAnchor: event.currentTarget });
-                this.props.dispatch(openDialog('clips'));
-              }}
+              onClick={() => this.props.dispatch(openDialog('clips'))}
               disabled={offline}
             >
               <ContentCut />

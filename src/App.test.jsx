@@ -6,7 +6,7 @@ import App from './App';
 import { createInitialState } from './initialState';
 import { createAppStore } from './store';
 
-const mocks = vi.hoisted(() => ({ authenticated: true, options: {}, requests: [], hardNavigate: vi.fn() }));
+const mocks = vi.hoisted(() => ({ authenticated: true, options: {}, requests: [], unexpectedRequests: [], hardNavigate: vi.fn() }));
 
 vi.mock('@commaai/my-comma-auth', () => ({
   default: {
@@ -121,11 +121,14 @@ async function mockFetch(input, init = {}) {
   if (url.pathname.endsWith('/subscribe_info')) return json(null);
   if (url.pathname.endsWith('/events.json') || url.pathname.endsWith('/coords.json')) return json([]);
   if (url.pathname.endsWith('/files') || url.pathname.endsWith('/preserved')) return json(url.pathname.endsWith('/files') ? {} : []);
+  if (/^\/v1\/devices\/[a-f0-9]{16}\/athena_offline_queue$/.test(url.pathname)) return json([]);
   if (url.hostname === 'athena.comma.ai') {
     const { method } = JSON.parse(init.body);
     return json({ jsonrpc: '2.0', id: 0, result: method === 'listUploadQueue' ? [] : {} });
   }
-  throw new Error(`Unhandled request: ${init.method || 'GET'} ${url.href}`);
+  const message = `Unhandled request: ${init.method || 'GET'} ${url.href}`;
+  mocks.unexpectedRequests.push(message);
+  throw new Error(message);
 }
 
 async function renderApp(pathname, options = {}) {
@@ -151,6 +154,7 @@ async function renderApp(pathname, options = {}) {
 }
 
 describe('whole-app behavior', () => {
+  beforeEach(() => { mocks.unexpectedRequests = []; });
   beforeAll(() => {
     vi.stubGlobal('fetch', vi.fn(mockFetch));
     vi.stubGlobal('PointerEvent', MouseEvent);
@@ -168,6 +172,9 @@ describe('whole-app behavior', () => {
     localStorage.clear();
     sessionStorage.clear();
     mocks.hardNavigate.mockClear();
+    if (mocks.unexpectedRequests.length) {
+      throw new Error(mocks.unexpectedRequests.join('\n'));
+    }
   });
 
   test('root uses a valid stored device and keeps the selection', async () => {
@@ -587,6 +594,34 @@ describe('whole-app behavior', () => {
     expect(await screen.findByRole('menu')).toBeVisible();
     expect(screen.queryByText('Sign in with Google')).not.toBeInTheDocument();
     expect(history.location.search).toBe(`?dialog=${dialog}`);
+  });
+
+  test.each([['downloads', 'Files'], ['route-info', 'More info']])('a cold %s menu stays anchored to its trigger through history and click navigation', async (dialog, label) => {
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect');
+    try {
+      const { history } = await renderApp(`/${FIRST}/${LOG}?dialog=${dialog}`);
+      const trigger = screen.getByText(label).parentElement;
+      expect(await screen.findByRole('menu')).toBeVisible();
+      expect(measure.mock.contexts).toContain(trigger);
+
+      fireEvent.keyDown(document, { key: 'Escape', keyCode: 27 });
+      await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+      expect(history.location.search).toBe('');
+      measure.mockClear();
+      act(() => history.goBack());
+      expect(await screen.findByRole('menu')).toBeVisible();
+      expect(measure.mock.contexts).toContain(trigger);
+
+      act(() => history.goForward());
+      await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+      measure.mockClear();
+      fireEvent.click(trigger);
+      expect(await screen.findByRole('menu')).toBeVisible();
+      expect(measure.mock.contexts).toContain(trigger);
+      expect(history.location.search).toBe(`?dialog=${dialog}`);
+    } finally {
+      measure.mockRestore();
+    }
   });
 
   test('More info fetches the current drive files when files from another drive are retained', async () => {

@@ -119,6 +119,16 @@ const GALLERY_STATES = [
     modalText: 'Preserved',
   },
   {
+    name: 'device-clips-url',
+    label: 'Device clips (direct link)',
+    page: 'dashboard',
+    path: `/${DONGLE_ID}?dialog=clips`,
+    clips: true,
+    newUrlState: true,
+    readyText: 'coastal-drive',
+    modalText: 'CLIPS ON THIS DEVICE',
+  },
+  {
     name: 'clips-menu-url',
     label: 'Clips menu (direct link)',
     page: 'drive',

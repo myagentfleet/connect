@@ -231,7 +231,11 @@ class Media extends Component {
     this.onPreserveToggle = this.onPreserveToggle.bind(this);
 
     this.routeViewed = false;
-    this.menuAnchors = {};
+    this.menuAnchors = {
+      clips: React.createRef(),
+      downloads: React.createRef(),
+      'route-info': React.createRef(),
+    };
     this.copyRequest = 0;
   }
 
@@ -259,7 +263,6 @@ class Media extends Component {
     const menuChanged = prevProps.dialog !== dialog;
     const showMapAlways = windowWidth >= 1536;
     if (prevProps.dongleId !== this.props.dongleId) {
-      this.menuAnchors = {};
       this.setState({ clipsSupported: false });
       this.checkClipsSupport();
     } else if (!deviceIsOnline(prevProps.device) && deviceIsOnline(this.props.device)) {
@@ -621,25 +624,28 @@ class Media extends Component {
           <div className={`${classes.mediaOptions} ml-auto`}>
             {clipsSupported && <Tooltip title={deviceIsOnline(device) ? '' : 'Device offline'} placement="top">
               <div
+                ref={this.menuAnchors.clips}
                 className={classes.mediaOption}
                 style={deviceIsOnline(device) ? {} : { opacity: 0.7 }}
                 aria-haspopup="true"
-                onClick={(ev) => deviceIsOnline(device) && this.openMenu('clips', ev)}
+                onClick={() => deviceIsOnline(device) && this.openMenu('clips')}
               >
                 <Typography className={classes.mediaOptionText}>Clip</Typography>
               </div>
             </Tooltip>}
             <div
+              ref={this.menuAnchors.downloads}
               className={classes.mediaOption}
               aria-haspopup="true"
-              onClick={ (ev) => this.openMenu('downloads', ev) }
+              onClick={ () => this.openMenu('downloads') }
             >
               <Typography className={classes.mediaOptionText}>Files</Typography>
             </div>
             <div
+              ref={this.menuAnchors['route-info']}
               className={classes.mediaOption}
               aria-haspopup="true"
-              onClick={ (ev) => this.openMenu('route-info', ev) }
+              onClick={ () => this.openMenu('route-info') }
             >
               <Typography className={classes.mediaOptionText}>More info</Typography>
             </div>
@@ -650,8 +656,7 @@ class Media extends Component {
     );
   }
 
-  openMenu(dialog, event) {
-    this.menuAnchors[dialog] = event.currentTarget;
+  openMenu(dialog) {
     this.props.dispatch(openDialog(dialog));
   }
 
@@ -694,7 +699,7 @@ class Media extends Component {
           dialogClip={this.props.dialogClip}
           dispatch={dispatch}
           dongleId={this.props.dongleId}
-          anchorEl={this.menuAnchors.clips}
+          anchorEl={() => this.menuAnchors.clips.current}
           onClose={() => dispatch(closeDialog())}
           route={currentRoute}
           routes={this.props.routes}
@@ -704,7 +709,7 @@ class Media extends Component {
         <Menu
           id="menu-download"
           open={ alwaysOpen || dialog === 'downloads' }
-          anchorEl={ this.menuAnchors.downloads }
+          anchorEl={ () => this.menuAnchors.downloads.current }
           onClose={ () => dispatch(closeDialog()) }
           anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
           transformOrigin={{ vertical: 'top', horizontal: 'right' }}
@@ -801,7 +806,7 @@ class Media extends Component {
         <Menu
           id="menu-info"
           open={ alwaysOpen || dialog === 'route-info' }
-          anchorEl={ this.menuAnchors['route-info'] }
+          anchorEl={ () => this.menuAnchors['route-info'].current }
           onClose={ () => dispatch(closeDialog()) }
           transformOrigin={{ vertical: 'top', horizontal: windowWidth > 400 ? 260 : 300 }}
         >
