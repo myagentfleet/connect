@@ -1,5 +1,5 @@
-# Diagnostic only: one runner, one observer, build each source once, then compare A/B/B/A.
-name: qa769-platforms-trace
+# Validation only: a separate branch, with the application pinned independently.
+name: qa769-platforms
 
 on:
   push:
@@ -10,43 +10,52 @@ permissions:
   contents: read
 
 jobs:
-  webkit-trace:
+  platforms:
     if: github.ref == 'refs/heads/qa/769-platforms'
-    name: Diagnostic desktop WebKit startup trace (A/B/B/A)
-    runs-on: macos-15
-    timeout-minutes: 25
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: firefox-linux
+            os: ubuntu-latest
+            engine: firefox
+            native: 'false'
+            cases: ''
+            diagnostic: 'false'
+          - profile: webkit-macos
+            os: macos-15
+            engine: webkit
+            native: 'false'
+            cases: ''
+            diagnostic: 'false'
     env:
-      SOURCE_A: 8eaa650615151569cb00eba21c79e167e969d9e6
-      SOURCE_B: ff8654bd8faf4e9b4de121bb1b188a7be7e1e745
-      QA769_ENGINE: webkit
-      QA769_NATIVE_PROFILE: 'false'
-      QA769_CASE: controls-and-decoded-playback
-      QA769_DIAGNOSTIC_ONLY: 'true'
-      QA769_TRACE_COMMANDS: 'true'
+      FINAL_CANDIDATE_SHA: 78a13db35e4c7f9aa1e90e03bcf3dc1793c051b9
+      QA769_ENGINE: ${{ matrix.engine }}
+      QA769_NATIVE_PROFILE: ${{ matrix.native }}
+      QA769_CASE: ${{ matrix.cases }}
+      QA769_DIAGNOSTIC_ONLY: ${{ matrix.diagnostic }}
+      QA769_OUTPUT: ${{ github.workspace }}/results/${{ matrix.profile }}
+      QA769_FIXTURES: ${{ github.workspace }}/application/public/demo-video
       VITE_POSTHOG_KEY: ''
       VITE_POSTHOG_HOST: ''
       E2E: 'true'
     defaults:
       run:
         shell: bash
+        working-directory: application
     steps:
-      - name: Checkout the exact published tracing harness
+      - name: Checkout validation harness
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
           path: harness
           persist-credentials: false
-      - name: Checkout application A
+      - name: Checkout exact application revision
         uses: actions/checkout@v4
         with:
-          ref: 8eaa650615151569cb00eba21c79e167e969d9e6
-          path: application-a
-          persist-credentials: false
-      - name: Checkout application B
-        uses: actions/checkout@v4
-        with:
-          ref: ff8654bd8faf4e9b4de121bb1b188a7be7e1e745
-          path: application-b
+          ref: ${{ env.FINAL_CANDIDATE_SHA }}
+          path: application
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -54,184 +63,33 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
-      - name: Verify and record source, observer, fixtures and runner identity
+      - name: Record source identity and copy validation script
         run: |
-          test "$(git -C application-a rev-parse HEAD)" = "$SOURCE_A"
-          test "$(git -C application-b rev-parse HEAD)" = "$SOURCE_B"
-          test "$(git -C harness rev-parse HEAD)" = "$GITHUB_SHA"
-          mkdir -p results/builds/A results/builds/B results/runs
-          cp harness/scripts/qa769-platforms.mjs application-a/scripts/qa769-platforms.mjs
-          cp harness/scripts/qa769-platforms.mjs application-b/scripts/qa769-platforms.mjs
-          cmp application-a/scripts/qa769-platforms.mjs application-b/scripts/qa769-platforms.mjs
-          node --check harness/scripts/qa769-platforms.mjs
-          sw_vers > results/runner-os.txt
-          node <<'NODE'
-          const assert = require('node:assert/strict');
-          const fs = require('node:fs');
-          const path = require('node:path');
-          const crypto = require('node:crypto');
-          const { execFileSync } = require('node:child_process');
-          const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
-          function hashes(directory) {
-            const result = {};
-            function visit(current) {
-              for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-                const file = path.join(current, entry.name);
-                if (entry.isDirectory()) visit(file);
-                else result[path.relative(directory, file)] = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-              }
-            }
-            visit(directory);
-            return result;
-          }
-          const fixturesA = hashes('application-a/public/demo-video');
-          const fixturesB = hashes('application-b/public/demo-video');
-          assert.deepEqual(fixturesA, fixturesB, 'Both sources must serve identical checked-in media and fixture bytes');
-          const sources = {
-            A: { applicationSha: process.env.SOURCE_A, checkout: 'application-a', fixtureSha256: fixturesA },
-            B: { applicationSha: process.env.SOURCE_B, checkout: 'application-b', fixtureSha256: fixturesB },
-          };
-          const provenance = {
-            diagnosticOnly: true,
-            description: 'Same macOS runner and current observer. Each source is built once with a diagnostic Vite hook recording openStream/startLoad arguments; init-script command wrappers preserve original calls. Four fresh-browser processes run A1/B1/B2/A2. This is not acceptance or an untouched production build.',
-            baselineRuns: [37893823478, 37895786869].map((id) => `https://github.com/myagentfleet/connect/actions/runs/${id}`),
-            harnessCommit: git('-C', 'harness', 'rev-parse', 'HEAD'),
-            harnessScript: 'scripts/qa769-platforms.mjs',
-            harnessScriptBlob: git('hash-object', 'harness/scripts/qa769-platforms.mjs'),
-            runnerImageVersion: process.env.ImageVersion || null,
-            runnerImageOS: process.env.ImageOS || null,
-            runnerOS: process.env.RUNNER_OS,
-            runnerArchitecture: process.env.RUNNER_ARCH,
-            swVers: fs.readFileSync('results/runner-os.txt', 'utf8'),
-            node: process.version, playwright: '1.64.0', bun: '1.3.14',
-            engine: 'webkit', headed: true, nativeProfile: false,
-            scenario: 'controls-and-decoded-playback', traceCommands: true,
-            order: ['A1', 'B1', 'B2', 'A2'], sources,
-          };
-          const save = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2));
-          save('results/provenance.json', provenance);
-          for (const [source, identity] of Object.entries(sources)) {
-            save(`results/builds/${source}/provenance.json`, { ...provenance, source, ...identity });
-          }
-          for (const run of provenance.order) {
-            const source = run[0];
-            const output = `results/runs/${run}`;
-            fs.mkdirSync(output, { recursive: true });
-            save(`${output}/provenance.json`, { ...provenance, run, source, ...sources[source],
-              buildDirectory: path.resolve(`results/builds/${source}/app`) });
-          }
-          console.log(JSON.stringify({ harnessCommit: provenance.harnessCommit,
-            harnessScriptBlob: provenance.harnessScriptBlob, order: provenance.order,
-            sourceA: sources.A.applicationSha, sourceB: sources.B.applicationSha,
-            fixtureFiles: Object.keys(fixturesA).length, runnerImageVersion: provenance.runnerImageVersion }));
-          NODE
-      - name: Install both frozen application dependency trees and pinned Playwright
+          test "$(git rev-parse HEAD)" = "$FINAL_CANDIDATE_SHA"
+          mkdir -p "$QA769_OUTPUT"
+          git rev-parse HEAD > "$QA769_OUTPUT/source-sha.txt"
+          echo "QA_CANDIDATE_SHA=$FINAL_CANDIDATE_SHA" >> "$GITHUB_ENV"
+          echo "VITE_APP_GIT_SHA=$FINAL_CANDIDATE_SHA" >> "$GITHUB_ENV"
+          cp ../harness/scripts/qa769-platforms.mjs scripts/qa769-platforms.mjs
+      - name: Install frozen application dependencies
+        run: bun install --frozen-lockfile 2>&1 | tee "$QA769_OUTPUT/install.log"
+      - name: Install pinned Playwright and browser with normal system dependencies
         run: |
-          for source in A B; do
-            if [ "$source" = A ]; then checkout=application-a; else checkout=application-b; fi
-            output="$GITHUB_WORKSPACE/results/builds/$source"
-            (
-              cd "$checkout"
-              bun install --frozen-lockfile 2>&1 | tee "$output/install.log"
-              bun add --no-save playwright@1.64.0 2>&1 | tee "$output/browser-tools.log"
-            )
-          done
-      - name: Install the shared pinned WebKit binary
-        working-directory: application-a
-        run: npx --no-install playwright install --with-deps webkit 2>&1 | tee "$GITHUB_WORKSPACE/results/browser-install.log"
-      - name: Build source A once with the labeled diagnostic trace hook
-        working-directory: application-a
-        env:
-          QA_CANDIDATE_SHA: ${{ env.SOURCE_A }}
-          VITE_APP_GIT_SHA: ${{ env.SOURCE_A }}
-          QA769_BUILD_ONLY: 'true'
-          QA769_APP_DIST: ${{ github.workspace }}/results/builds/A/app
-          QA769_OUTPUT: ${{ github.workspace }}/results/builds/A
-          QA769_FIXTURES: ${{ github.workspace }}/application-a/public/demo-video
-        run: node scripts/qa769-platforms.mjs 2>&1 | tee "$QA769_OUTPUT/build.log"
-      - name: Build source B once with the labeled diagnostic trace hook
-        working-directory: application-b
-        env:
-          QA_CANDIDATE_SHA: ${{ env.SOURCE_B }}
-          VITE_APP_GIT_SHA: ${{ env.SOURCE_B }}
-          QA769_BUILD_ONLY: 'true'
-          QA769_APP_DIST: ${{ github.workspace }}/results/builds/B/app
-          QA769_OUTPUT: ${{ github.workspace }}/results/builds/B
-          QA769_FIXTURES: ${{ github.workspace }}/application-b/public/demo-video
-        run: node scripts/qa769-platforms.mjs 2>&1 | tee "$QA769_OUTPUT/build.log"
-      - name: A1 — fresh browser, old application
-        id: a1
-        continue-on-error: true
-        timeout-minutes: 4
-        working-directory: application-a
-        env:
-          QA_CANDIDATE_SHA: ${{ env.SOURCE_A }}
-          VITE_APP_GIT_SHA: ${{ env.SOURCE_A }}
-          QA769_APP_DIST: ${{ github.workspace }}/results/builds/A/app
-          QA769_OUTPUT: ${{ github.workspace }}/results/runs/A1
-          QA769_FIXTURES: ${{ github.workspace }}/application-a/public/demo-video
-        run: node scripts/qa769-platforms.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
-      - name: B1 — fresh browser, current application
-        id: b1
-        continue-on-error: true
-        timeout-minutes: 4
-        working-directory: application-b
-        env:
-          QA_CANDIDATE_SHA: ${{ env.SOURCE_B }}
-          VITE_APP_GIT_SHA: ${{ env.SOURCE_B }}
-          QA769_APP_DIST: ${{ github.workspace }}/results/builds/B/app
-          QA769_OUTPUT: ${{ github.workspace }}/results/runs/B1
-          QA769_FIXTURES: ${{ github.workspace }}/application-b/public/demo-video
-        run: node scripts/qa769-platforms.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
-      - name: B2 — fresh browser, current application repeated
-        id: b2
-        continue-on-error: true
-        timeout-minutes: 4
-        working-directory: application-b
-        env:
-          QA_CANDIDATE_SHA: ${{ env.SOURCE_B }}
-          VITE_APP_GIT_SHA: ${{ env.SOURCE_B }}
-          QA769_APP_DIST: ${{ github.workspace }}/results/builds/B/app
-          QA769_OUTPUT: ${{ github.workspace }}/results/runs/B2
-          QA769_FIXTURES: ${{ github.workspace }}/application-b/public/demo-video
-        run: node scripts/qa769-platforms.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
-      - name: A2 — fresh browser, old application repeated
-        id: a2
-        continue-on-error: true
-        timeout-minutes: 4
-        working-directory: application-a
-        env:
-          QA_CANDIDATE_SHA: ${{ env.SOURCE_A }}
-          VITE_APP_GIT_SHA: ${{ env.SOURCE_A }}
-          QA769_APP_DIST: ${{ github.workspace }}/results/builds/A/app
-          QA769_OUTPUT: ${{ github.workspace }}/results/runs/A2
-          QA769_FIXTURES: ${{ github.workspace }}/application-a/public/demo-video
-        run: node scripts/qa769-platforms.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
-      - name: Record all comparison outcomes
-        if: always()
-        env:
-          A1_OUTCOME: ${{ steps.a1.outcome }}
-          B1_OUTCOME: ${{ steps.b1.outcome }}
-          B2_OUTCOME: ${{ steps.b2.outcome }}
-          A2_OUTCOME: ${{ steps.a2.outcome }}
+          bun add --no-save playwright@1.64.0 2>&1 | tee "$QA769_OUTPUT/browser-tools.log"
+          npx --no-install playwright install --with-deps "$QA769_ENGINE" 2>&1 | tee "$QA769_OUTPUT/browser-install.log"
+      - name: Exercise real headed browser engine
         run: |
-          mkdir -p results
-          node <<'NODE'
-          const fs = require('node:fs');
-          const runs = ['A1', 'B1', 'B2', 'A2'].map((run) => ({ run, outcome: process.env[`${run}_OUTCOME`] || 'not-run' }));
-          const summary = { diagnosticOnly: true, runs, allComparisonsPassed: runs.every(({ outcome }) => outcome === 'success') };
-          fs.writeFileSync('results/comparison-outcomes.json', JSON.stringify(summary, null, 2));
-          console.log(JSON.stringify(summary));
-          NODE
-      - name: Upload all diagnostic evidence, including failures
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" node scripts/qa769-platforms.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
+          else
+            node scripts/qa769-platforms.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
+          fi
+      - name: Upload diagnostics even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa769-trace-abba-${{ github.run_id }}
-          path: results
+          name: qa769-platforms-${{ matrix.profile }}-${{ github.run_id }}
+          path: results/${{ matrix.profile }}
           if-no-files-found: warn
           retention-days: 7
-      - name: Preserve comparison failures in the job outcome
-        if: always()
-        run: |
-          node -e "const fs = require('node:fs'); const result = JSON.parse(fs.readFileSync('results/comparison-outcomes.json')); if (!result.allComparisonsPassed) process.exitCode = 1;"
+

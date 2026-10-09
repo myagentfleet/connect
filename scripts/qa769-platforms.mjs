@@ -230,9 +230,10 @@ async function main() {
     const transforms = [];
     const tracePlugin = { name: 'qa769-diagnostic-command-trace', enforce: 'pre', transform(code, id) {
       if (!id.replaceAll('\\', '/').endsWith('/src/components/DriveVideo/stream.js')) return;
-      const entry = 'export function openStream(video, url, { onError, onAudio, startPosition = 0 }) {';
+      const entries = code.split('\n').filter((line) => /^export function openStream\(video, url, \{ onError, (?:onWaiting, )?onAudio, startPosition = 0 \}\) \{$/.test(line));
+      assert.equal(entries.length, 1, 'The diagnostic hook matches one reviewed stream entry');
+      const [entry] = entries;
       const errorHandler = 'hls.on(Hls.Events.ERROR, (_event, error) => {';
-      assert.ok(code.includes(entry), 'The diagnostic hook matches the reviewed stream entry');
       assert.ok(code.includes(errorHandler), 'The diagnostic hook matches the existing HLS error listener');
       assert.equal(code.split('hls.startLoad(position)').length - 1, 2, 'Exactly two reviewed HLS loading calls are traced');
       const transformed = code.replace(entry, `${entry}\n  globalThis.qaCommandTrace?.push({ type: 'openStream', at: performance.now(), startPosition, url });`)
