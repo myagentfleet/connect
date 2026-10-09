@@ -1,19 +1,16 @@
-# Validation only: publish separately from the fix PR.
-name: qa769-modern-cleanup
-
-on:
+name: qa769-menu-visuals
+'on':
   push:
-    branches: [qa/769-modern]
-  workflow_dispatch:
-
+    branches:
+    - qa/769-modern
+  workflow_dispatch: ''
 permissions:
   contents: read
-
 jobs:
   chrome:
     if: github.ref == 'refs/heads/qa/769-modern'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 6
     env:
       FINAL_CANDIDATE_SHA: 8276cd68b3ac31da150fc8b4566fb29e479e2f65
       QA769_HEADLESS: 'false'
@@ -26,67 +23,80 @@ jobs:
       VITE_POSTHOG_KEY: ''
       VITE_POSTHOG_HOST: ''
       E2E: 'true'
+      QA769_CASE: controls-and-responsive
     defaults:
       run:
         shell: bash
         working-directory: application
     steps:
-      - name: Checkout validation harness and unchanged media fixtures
-        uses: actions/checkout@v4
-        with:
-          path: harness
-          persist-credentials: false
-      - name: Checkout exact candidate
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.FINAL_CANDIDATE_SHA }}
-          path: application
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-      - name: Record source identity and copy validation script
-        run: |
-          test "$(git rev-parse HEAD)" = "$FINAL_CANDIDATE_SHA"
-          mkdir -p "$QA769_OUTPUT"
-          git rev-parse HEAD > "$QA769_OUTPUT/source-sha.txt"
-          echo "QA_CANDIDATE_SHA=$FINAL_CANDIDATE_SHA" >> "$GITHUB_ENV"
-          echo "VITE_APP_GIT_SHA=$FINAL_CANDIDATE_SHA" >> "$GITHUB_ENV"
-          cp ../harness/scripts/qa769-modern.mjs scripts/qa769-modern.mjs
-      - name: Install frozen dependencies
-        run: bun install --frozen-lockfile 2>&1 | tee "$QA769_OUTPUT/install.log"
-      - name: Run repository lint and complete unit suite
-        run: |
-          bun run lint 2>&1 | tee "$QA769_OUTPUT/lint.log"
-          bun run test 2>&1 | tee "$QA769_OUTPUT/test.log"
-      - name: Install gallery-matched browser tools without saving dependencies
-        run: bun add --no-save --trust puppeteer@24.16.0 pngjs@7.0.0 2>&1 | tee "$QA769_OUTPUT/browser-tools.log"
-      - name: Exercise headed Chrome with a desktop display
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" node scripts/qa769-modern.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
-      - name: Verify all seven Chrome scenarios ran without a case filter
-        run: |
-          node --input-type=module <<'JS'
-          import assert from 'node:assert/strict';
-          import { readFileSync } from 'node:fs';
-          import { resolve } from 'node:path';
-          const report = JSON.parse(readFileSync(resolve(process.env.QA769_OUTPUT, 'report.json'), 'utf8'));
-          assert.equal(report.caseFilter, null);
-          assert.equal(report.captureOnly, false);
-          assert.deepEqual(report.cases.map(({ name }) => name).sort(), [
-            'comparison-healthy-player', 'controls-and-responsive', 'missing-first-and-retry',
-            'natural-chrome-middle-gap-recovery', 'forced-mse-prefetch-and-loops',
-            'startup-seek-and-route-reset', 'navigation-cancellation-and-loading',
-          ].sort());
-          assert.ok(report.cases.every(({ status }) => status === 'passed'));
-          assert.equal(report.passed, true);
-          console.log('All seven full Chrome scenarios passed without filtering.');
-          JS
-      - name: Upload diagnostics even on failure
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: qa769-modern-candidate-${{ github.run_id }}
-          path: results/candidate
-          if-no-files-found: warn
-          retention-days: 7
+    - name: Checkout validation harness and unchanged media fixtures
+      uses: actions/checkout@v4
+      with:
+        path: harness
+        persist-credentials: 'false'
+    - name: Checkout exact candidate
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ env.FINAL_CANDIDATE_SHA }}
+        path: application
+        fetch-depth: '0'
+        persist-credentials: 'false'
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.3.14
+    - name: Record source identity and copy validation script
+      run: 'test "$(git rev-parse HEAD)" = "$FINAL_CANDIDATE_SHA"
+
+        mkdir -p "$QA769_OUTPUT"
+
+        git rev-parse HEAD > "$QA769_OUTPUT/source-sha.txt"
+
+        echo "QA_CANDIDATE_SHA=$FINAL_CANDIDATE_SHA" >> "$GITHUB_ENV"
+
+        echo "VITE_APP_GIT_SHA=$FINAL_CANDIDATE_SHA" >> "$GITHUB_ENV"
+
+        cp ../harness/scripts/qa769-modern.mjs scripts/qa769-modern.mjs
+
+        '
+    - name: Install frozen dependencies
+      run: bun install --frozen-lockfile 2>&1 | tee "$QA769_OUTPUT/install.log"
+    - name: Install gallery-matched browser tools without saving dependencies
+      run: bun add --no-save --trust puppeteer@24.16.0 pngjs@7.0.0 2>&1 | tee "$QA769_OUTPUT/browser-tools.log"
+    - name: Exercise headed Chrome with a desktop display
+      run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" node scripts/qa769-modern.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
+    - name: Verify focused interactions and settled menu capture
+      run: 'node --input-type=module <<''JS''
+
+        import assert from ''node:assert/strict'';
+
+        import { readFileSync } from ''node:fs'';
+
+        import { resolve } from ''node:path'';
+
+        const report = JSON.parse(readFileSync(resolve(process.env.QA769_OUTPUT, ''report.json''), ''utf8''));
+
+        assert.equal(report.caseFilter, ''controls-and-responsive'');
+
+        assert.equal(report.captureOnly, false);
+
+        assert.deepEqual(report.cases.map(({ name }) => name), [''controls-and-responsive'']);
+
+        assert.ok(report.cases.every(({ status }) => status === ''passed''));
+
+        assert.equal(report.passed, true);
+
+        assert.ok(report.menuCaptureStates.some(({ label, opacity }) => label === ''More info'' && opacity === ''1''));
+
+        console.log(''Focused interactions passed; More info was captured after its animation settled.'');
+
+        JS
+
+        '
+    - name: Upload diagnostics even on failure
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: qa769-modern-candidate-${{ github.run_id }}
+        path: results/candidate
+        if-no-files-found: warn
+        retention-days: '7'

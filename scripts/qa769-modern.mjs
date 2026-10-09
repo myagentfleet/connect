@@ -173,6 +173,24 @@ async function adjacentMenus(page) {
       assert.equal(await trigger.evaluate((element) => element.getAttribute('aria-expanded')), 'true', `${label} reports its open state`);
       await page.waitForFunction(({ id, text }) => document.getElementById(id)?.textContent.includes(text), {}, { id, text: expectedText });
       await recordFocus('ready');
+      if (label === 'More info') {
+        // MUI Popover grows the Paper immediately around its role=menu list.
+        const settled = await page.waitForFunction((menuId) => {
+          const menu = document.getElementById(menuId)?.querySelector('[role="menu"]');
+          const paper = menu?.parentElement;
+          if (!paper) return false;
+          const style = getComputedStyle(paper);
+          const rect = paper.getBoundingClientRect();
+          const animations = paper.getAnimations().map(({ playState, pending }) => ({ playState, pending }));
+          const identity = style.transform === 'none' || new DOMMatrixReadOnly(style.transform).isIdentity;
+          if (style.opacity !== '1' || !identity || style.visibility !== 'visible' || style.display === 'none'
+            || rect.width <= 0 || rect.height <= 0 || animations.some(({ playState, pending }) => pending || playState === 'running')) return false;
+          return { menuId, opacity: style.opacity, transform: style.transform, rect: rect.toJSON(), animations };
+        }, {}, id);
+        report.menuCaptureStates ||= [];
+        report.menuCaptureStates.push({ label, ...await settled.jsonValue() });
+        await settled.dispose();
+      }
       await capture(page, label === 'Files' ? 'files-menu' : 'route-info-menu', true);
       await page.keyboard.press('Escape');
       await recordFocus('after-escape');
