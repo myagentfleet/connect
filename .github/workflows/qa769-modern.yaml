@@ -1,0 +1,89 @@
+# Validation only: publish separately from the fix PR; pin the final source SHA below.
+name: qa769-modern
+
+on:
+  push:
+    branches: [qa/769-modern]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chrome:
+    if: github.ref == 'refs/heads/qa/769-modern'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - revision: candidate
+            ref: ''
+            capture_only: 'false'
+          - revision: upstream
+            ref: 109edb39ffa7a4ad3c38788ca2f39a286538ff07
+            capture_only: 'true'
+          - revision: previous
+            ref: c0772ff6641ce93bc16a6fc884a0959da4a9c17b
+            capture_only: 'true'
+    env:
+      FINAL_CANDIDATE_SHA: 9e60174590651feaf61477a38a9ab51d590b54f1
+      QA769_REVISION_LABEL: ${{ matrix.revision }}
+      QA769_CAPTURE_ONLY: ${{ matrix.capture_only }}
+      QA769_OUTPUT: ${{ github.workspace }}/results/${{ matrix.revision }}
+      QA769_FIXTURES: ${{ github.workspace }}/harness/public/demo-video
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      VITE_POSTHOG_KEY: ''
+      VITE_POSTHOG_HOST: ''
+      E2E: 'true'
+    defaults:
+      run:
+        shell: bash
+        working-directory: application
+    steps:
+      - name: Checkout validation harness and unchanged media fixtures
+        uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Checkout exact application revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref || env.FINAL_CANDIDATE_SHA }}
+          path: application
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Record source identity and copy validation script
+        env:
+          EXPECTED_SHA: ${{ matrix.ref || env.FINAL_CANDIDATE_SHA }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          mkdir -p "$QA769_OUTPUT"
+          git rev-parse HEAD > "$QA769_OUTPUT/source-sha.txt"
+          echo "QA_CANDIDATE_SHA=$EXPECTED_SHA" >> "$GITHUB_ENV"
+          echo "VITE_APP_GIT_SHA=$EXPECTED_SHA" >> "$GITHUB_ENV"
+          cp ../harness/scripts/qa769-modern.mjs scripts/qa769-modern.mjs
+      - name: Install revision's frozen dependencies
+        run: bun install --frozen-lockfile 2>&1 | tee "$QA769_OUTPUT/install.log"
+      - name: Run candidate repository lint and complete unit suite
+        if: matrix.revision == 'candidate'
+        run: |
+          bun run lint 2>&1 | tee "$QA769_OUTPUT/lint.log"
+          bun run test 2>&1 | tee "$QA769_OUTPUT/test.log"
+      - name: Install gallery-matched browser tools without saving dependencies
+        run: bun add --no-save --trust puppeteer@24.16.0 pngjs@7.0.0 2>&1 | tee "$QA769_OUTPUT/browser-tools.log"
+      - name: Exercise candidate or capture healthy baseline
+        run: node scripts/qa769-modern.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
+      - name: Upload diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa769-modern-${{ matrix.revision }}-${{ github.run_id }}
+          path: results/${{ matrix.revision }}
+          if-no-files-found: warn
+          retention-days: 7
