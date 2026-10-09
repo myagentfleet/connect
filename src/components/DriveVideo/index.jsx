@@ -19,7 +19,7 @@ class RouteVideo extends Component {
     this.mounted = true;
     this.props.dispatch(resetPlayback());
     this.video.current.audioTracks?.addEventListener?.('addtrack', this.detectAudio);
-    this.loadSource();
+    this.loadSource(this.props.loop?.startTime ?? 0);
   }
 
   componentDidUpdate(prevProps) {
@@ -44,7 +44,7 @@ class RouteVideo extends Component {
     this.stream?.destroy();
   }
 
-  loadSource = () => {
+  loadSource = (offset = this.props.offset) => {
     this.sourceId += 1;
     const sourceId = this.sourceId;
     this.playAttempt += 1;
@@ -61,7 +61,7 @@ class RouteVideo extends Component {
     const url = api.video.getQcameraStreamUrl(currentRoute.fullname, currentRoute.share_exp, currentRoute.share_sig);
     const active = () => this.mounted && this.sourceId === sourceId;
     this.stream = openStream(this.video.current, url, {
-      startPosition: this.seekPosition(),
+      startPosition: this.seekPosition(offset),
       onError: (error) => { if (active()) this.onStreamError(error); },
       onAudio: () => { if (active()) this.props.dispatch(setHasAudio(true)); },
     });
@@ -320,7 +320,7 @@ class RouteVideo extends Component {
                 <Typography>{error}</Typography>
               </div>
               {error === NO_VIDEO ? <Typography>Choose another range on the timeline.</Typography>
-                : <Button onClick={this.loadSource} style={{ color: '#151C20', backgroundColor: 'white', borderRadius: 8, minHeight: 40, padding: '8px 24px', marginTop: 8 }}>Retry</Button>}
+                : <Button onClick={() => this.loadSource()} style={{ color: '#151C20', backgroundColor: 'white', borderRadius: 8, minHeight: 40, padding: '8px 24px', marginTop: 8 }}>Retry</Button>}
             </div> : <CircularProgress style={{ color: 'white' }} thickness={4} size={50} aria-label="Loading video" />}
           </div>
         )}

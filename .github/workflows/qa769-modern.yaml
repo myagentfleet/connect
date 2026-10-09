@@ -1,4 +1,4 @@
-# Validation only: publish separately from the fix PR; pin the final source SHA below.
+# Validation only: publish separately from the fix PR.
 name: qa769-modern
 
 on:
@@ -13,26 +13,13 @@ jobs:
   chrome:
     if: github.ref == 'refs/heads/qa/769-modern'
     runs-on: ubuntu-latest
-    timeout-minutes: 12
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - revision: candidate
-            ref: ''
-            capture_only: 'false'
-          - revision: upstream
-            ref: 109edb39ffa7a4ad3c38788ca2f39a286538ff07
-            capture_only: 'true'
-          - revision: previous
-            ref: d70ba5c322ca4f4d1f49cf1009da2cf05cfa6b20
-            capture_only: 'true'
+    timeout-minutes: 10
     env:
-      FINAL_CANDIDATE_SHA: 8eaa650615151569cb00eba21c79e167e969d9e6
+      FINAL_CANDIDATE_SHA: ff8654bd8faf4e9b4de121bb1b188a7be7e1e745
       QA769_HEADLESS: 'false'
-      QA769_REVISION_LABEL: ${{ matrix.revision }}
-      QA769_CAPTURE_ONLY: ${{ matrix.capture_only }}
-      QA769_OUTPUT: ${{ github.workspace }}/results/${{ matrix.revision }}
+      QA769_REVISION_LABEL: candidate
+      QA769_CAPTURE_ONLY: 'false'
+      QA769_OUTPUT: ${{ github.workspace }}/results/candidate
       QA769_FIXTURES: ${{ github.workspace }}/harness/public/demo-video
       PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
       PUPPETEER_SKIP_DOWNLOAD: 'true'
@@ -49,10 +36,10 @@ jobs:
         with:
           path: harness
           persist-credentials: false
-      - name: Checkout exact application revision
+      - name: Checkout exact candidate
         uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.ref || env.FINAL_CANDIDATE_SHA }}
+          ref: ${{ env.FINAL_CANDIDATE_SHA }}
           path: application
           fetch-depth: 0
           persist-credentials: false
@@ -60,19 +47,16 @@ jobs:
         with:
           bun-version: 1.3.14
       - name: Record source identity and copy validation script
-        env:
-          EXPECTED_SHA: ${{ matrix.ref || env.FINAL_CANDIDATE_SHA }}
         run: |
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$FINAL_CANDIDATE_SHA"
           mkdir -p "$QA769_OUTPUT"
           git rev-parse HEAD > "$QA769_OUTPUT/source-sha.txt"
-          echo "QA_CANDIDATE_SHA=$EXPECTED_SHA" >> "$GITHUB_ENV"
-          echo "VITE_APP_GIT_SHA=$EXPECTED_SHA" >> "$GITHUB_ENV"
+          echo "QA_CANDIDATE_SHA=$FINAL_CANDIDATE_SHA" >> "$GITHUB_ENV"
+          echo "VITE_APP_GIT_SHA=$FINAL_CANDIDATE_SHA" >> "$GITHUB_ENV"
           cp ../harness/scripts/qa769-modern.mjs scripts/qa769-modern.mjs
-      - name: Install revision's frozen dependencies
+      - name: Install frozen dependencies
         run: bun install --frozen-lockfile 2>&1 | tee "$QA769_OUTPUT/install.log"
-      - name: Run candidate repository lint and complete unit suite
-        if: matrix.revision == 'candidate'
+      - name: Run repository lint and complete unit suite
         run: |
           bun run lint 2>&1 | tee "$QA769_OUTPUT/lint.log"
           bun run test 2>&1 | tee "$QA769_OUTPUT/test.log"
@@ -84,7 +68,96 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa769-modern-${{ matrix.revision }}-${{ github.run_id }}
-          path: results/${{ matrix.revision }}
+          name: qa769-modern-candidate-${{ github.run_id }}
+          path: results/candidate
+          if-no-files-found: warn
+          retention-days: 7
+
+  mount-regression:
+    if: github.ref == 'refs/heads/qa/769-modern'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      OLD_CANDIDATE_SHA: 8eaa650615151569cb00eba21c79e167e969d9e6
+      NEW_CANDIDATE_SHA: ff8654bd8faf4e9b4de121bb1b188a7be7e1e745
+      EXPECTED_TEST_BLOB: ac559b314a41f7561e8509dcc819cd445aea68de
+      QA769_OUTPUT: ${{ github.workspace }}/results/mount-regression
+    defaults:
+      run:
+        shell: bash
+        working-directory: application
+    steps:
+      - name: Checkout validation harness containing the new regression tests
+        uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Checkout unchanged old application
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.OLD_CANDIDATE_SHA }}
+          path: application
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Record identities and copy only the new test file
+        run: |
+          test "$(git rev-parse HEAD)" = "$OLD_CANDIDATE_SHA"
+          test "$(git -C ../harness hash-object src/components/DriveVideo/index.test.jsx)" = "$EXPECTED_TEST_BLOB"
+          mkdir -p "$QA769_OUTPUT"
+          git rev-parse HEAD > "$QA769_OUTPUT/old-source-sha.txt"
+          git rev-parse HEAD:src/components/DriveVideo/index.jsx > "$QA769_OUTPUT/old-controller-blob.txt"
+          git -C ../harness rev-parse HEAD > "$QA769_OUTPUT/harness-sha.txt"
+          printf '%s\n' "$NEW_CANDIDATE_SHA" > "$QA769_OUTPUT/new-test-source-sha.txt"
+          cp ../harness/src/components/DriveVideo/index.test.jsx src/components/DriveVideo/index.test.jsx
+          git hash-object src/components/DriveVideo/index.test.jsx > "$QA769_OUTPUT/new-test-blob.txt"
+          test "$(git diff --name-only)" = 'src/components/DriveVideo/index.test.jsx'
+          git diff --exit-code -- . ':!src/components/DriveVideo/index.test.jsx'
+      - name: Install old revision's frozen dependencies
+        run: bun install --frozen-lockfile 2>&1 | tee "$QA769_OUTPUT/install.log"
+      - name: Prove all four mount-position assertions fail on the old controller
+        run: |
+          set +e
+          bun run test src/components/DriveVideo/index.test.jsx --testNamePattern='at the reset position before metadata' --reporter=json --outputFile="$QA769_OUTPUT/regression.json" 2>&1 | tee "$QA769_OUTPUT/test.log"
+          test_status=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$test_status" > "$QA769_OUTPUT/test-exit-code.txt"
+          test "$test_status" -eq 1
+          node --input-type=module <<'JS' 2>&1 | tee "$QA769_OUTPUT/verification.log"
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import { resolve } from 'node:path';
+          const report = JSON.parse(readFileSync(resolve(process.env.QA769_OUTPUT, 'regression.json'), 'utf8'));
+          assert.equal(report.numFailedTests, 4, 'Exactly four regression assertions must fail');
+          assert.equal(report.numPassedTests, 0, 'No selected case may pass on the old controller');
+          assert.equal(report.success, false);
+          assert.equal(report.testResults.length, 1, 'Only the requested test file runs');
+          const file = report.testResults[0];
+          assert.equal(file.message, '', 'Collection or module errors are not regression proof');
+          const failures = file.assertionResults.filter(({ status }) => status === 'failed');
+          assert.equal(failures.length, 4);
+          assert.equal(report.numPendingTests, file.assertionResults.length - 4);
+          assert.ok(file.assertionResults.filter(({ status }) => status !== 'failed').every(({ status }) => ['pending', 'skipped'].includes(status)));
+          const messages = failures.map(({ title, failureMessages }) => {
+            assert.match(title, /^starts (native|MSE) at the reset position before metadata/);
+            const message = failureMessages.join('\n').replace(/\u001b\[[0-9;]*m/g, '');
+            assert.match(message, /AssertionError: expected (123 to be \+?0|58 to be 18)\b/);
+            console.log(`${title}\n${message}`);
+            return message;
+          });
+          assert.equal(failures.filter(({ title }) => title.startsWith('starts native ')).length, 2);
+          assert.equal(failures.filter(({ title }) => title.startsWith('starts MSE ')).length, 2);
+          assert.equal(messages.filter((message) => /expected 123 to be \+?0\b/.test(message)).length, 2);
+          assert.equal(messages.filter((message) => /expected 58 to be 18\b/.test(message)).length, 2);
+          console.log('Confirmed: four numeric mount-position regressions fail on the unchanged old controller.');
+          JS
+          git diff --exit-code -- . ':!src/components/DriveVideo/index.test.jsx'
+      - name: Upload regression proof even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa769-mount-regression-${{ github.run_id }}
+          path: results/mount-regression
           if-no-files-found: warn
           retention-days: 7
