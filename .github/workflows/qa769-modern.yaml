@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      FINAL_CANDIDATE_SHA: 42a2660699489962c5304f37d5e72c485a7fa29b
+      FINAL_CANDIDATE_SHA: 0996a76f1a3d963cde7f0d10b211c5cd02fb0c0e
       QA769_HEADLESS: 'false'
       QA769_REVISION_LABEL: candidate
       QA769_CAPTURE_ONLY: 'false'
