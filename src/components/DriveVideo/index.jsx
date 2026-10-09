@@ -345,7 +345,10 @@ class DriveVideo extends Component {
     };
 
     return (
-      <div className="DriveVideo w-full relative max-w-[964px] m-[0_auto]" style={{ aspectRatio }}>
+      <div className="DriveVideo w-full relative m-[0_auto]" style={{
+        aspectRatio,
+        maxWidth: `min(964px, calc(var(--drive-video-height, ${964 / aspectRatio}px) * ${aspectRatio}))`,
+      }}>
         <VideoOverlay loading={isBufferingVideo} error={videoError} />
         <ReactPlayer
           ref={this.videoPlayer}

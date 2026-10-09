@@ -23,12 +23,44 @@ const FULLNAME = `${DONGLE}|${LOG}`;
 const DRIVE_PATH = `/${DONGLE}/${LOG}`;
 const VIDEO = '.DriveView video';
 const WAIT = { timeout: 15000, polling: 50 };
+const MAP_STYLE_PATH = '/styles/v1/commaai/cjj4yzqk201c52ss60ebmow0w';
+const MAP_COORDS = [
+  [-117.194, 32.748], [-117.193, 32.748], [-117.192, 32.748],
+  [-117.191, 32.748], [-117.19, 32.748], [-117.19, 32.749],
+  [-117.19, 32.75], [-117.19, 32.751], [-117.19, 32.752],
+].map(([lng, lat], t) => ({ t, lng, lat }));
+
+function mapFixtureStyle() {
+  const features = [];
+  for (let index = -8; index <= 8; index += 1) {
+    const longitude = -117.19 + index * 0.002;
+    const latitude = 32.748 + index * 0.002;
+    for (const coordinates of [
+      [[longitude, 32.72], [longitude, 32.78]],
+      [[-117.22, latitude], [-117.16, latitude]],
+    ]) {
+      features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates } });
+    }
+  }
+  return {
+    version: 8,
+    name: 'Synthetic validation street grid',
+    sources: { 'fixture-roads': { type: 'geojson', data: { type: 'FeatureCollection', features } } },
+    layers: [
+      { id: 'fixture-background', type: 'background', paint: { 'background-color': '#20292d' } },
+      { id: 'fixture-roads', type: 'line', source: 'fixture-roads',
+        paint: { 'line-color': '#465960', 'line-width': 5 } },
+    ],
+  };
+}
+
 const report = {
   sourceSha: process.env.GITHUB_SHA || null,
   origin,
   startedAt: new Date().toISOString(),
-  scope: 'Unmodified built app with actual HLS.js and browser decoder; all account/device/media responses are synthetic and intercepted.',
-  limitations: 'No live device, signed media URL, remote CDN, adaptive bitrate, audio, or Safari/native-HLS verification.',
+  scope: 'Unmodified built app with actual HLS.js, browser decoder, and Mapbox renderer; account/device/media/map responses are synthetic and intercepted.',
+  limitations: 'No live device, signed media URL, remote CDN or map tiles, adaptive bitrate, audio, or Safari/native-HLS verification.',
+  mapFixture: { coordinates: MAP_COORDS, style: mapFixtureStyle() },
   passed: false,
   cases: [],
 };
@@ -56,7 +88,8 @@ function fixtureData() {
     segment_numbers: [0], segment_start_times: [start], segment_end_times: [start + 8000],
     maxqlog: 0, procqlog: 0, distance: 0.1, make: 'ford', platform: 'FORD_BRONCO_SPORT_MK1',
     is_public: true, is_preserved: true, version: '0.10.4', url: `${origin}/__hls-route`,
-    start_lat: 32.75, start_lng: -117.19, end_lat: 32.75, end_lng: -117.19,
+    start_lat: MAP_COORDS[0].lat, start_lng: MAP_COORDS[0].lng,
+    end_lat: MAP_COORDS[8].lat, end_lng: MAP_COORDS[8].lng,
     startLocation: { place: 'Synthetic start', details: 'Validation fixture' },
     endLocation: { place: 'Synthetic end', details: 'Validation fixture' },
   };
@@ -86,7 +119,11 @@ async function intercept(request, data, assets, result) {
       result.segments.push(name);
       return respond(request, assets.get(name), 'video/mp2t');
     }
-    if (path === '/__hls-route/0/events.json' || path === '/__hls-route/0/coords.json') return json([]);
+    if (path === '/__hls-route/0/events.json') return json([]);
+    if (path === '/__hls-route/0/coords.json') {
+      result.mapCoordinateRequests += 1;
+      return json(MAP_COORDS);
+    }
     if (path === '/__hls-route/0/sprite.jpg') {
       return respond(request, assets.get('sprite.jpg'), 'image/jpeg');
     }
@@ -96,6 +133,10 @@ async function intercept(request, data, assets, result) {
     assert.equal(url.pathname, '/npm/hls.js@1.4.8/dist/hls.min.js');
     result.sdkRequests += 1;
     return respond(request, assets.get('sdk'), 'text/javascript');
+  }
+  if (url.hostname === 'api.mapbox.com' && path === MAP_STYLE_PATH && request.method() === 'GET') {
+    result.mapStyleRequests += 1;
+    return json(mapFixtureStyle());
   }
   if (!['api.comma.ai', 'billing.comma.ai', 'athena.comma.ai'].includes(url.hostname)) {
     result.blockedExternal.push(`${request.method()} ${url.origin}${url.pathname}`);
@@ -304,11 +345,112 @@ async function verifySpeedSelection(page, result) {
   result.speedSelection.restored = await retainedPlayback(page, reference);
 }
 
+async function verifyRenderedMap(page, result) {
+  result.phase = 'synthetic map rendering';
+  const selector = '.DriveView canvas.mapboxgl-canvas';
+  await page.waitForSelector(selector, { visible: true, timeout: WAIT.timeout });
+  const renderer = await page.$eval(selector, (canvas) => {
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (!gl || gl.isContextLost()) throw new Error('Actual Mapbox canvas has no usable WebGL context');
+    const bounds = canvas.getBoundingClientRect();
+    return { width: bounds.width, height: bounds.height, renderer: gl.getParameter(gl.RENDERER) };
+  });
+  assert(renderer.width >= 200 && renderer.height >= 200, 'Map canvas is too small to assess');
+  const deadline = Date.now() + WAIT.timeout;
+  const canvas = await page.$(selector);
+  async function sampleRenderedMap() {
+    const png = await canvas.screenshot({ encoding: 'base64' });
+    const sample = await page.evaluate(async (encoded) => {
+      // Inspect compositor pixels without replacing or reconfiguring the actual WebGL canvas.
+      const image = new Image();
+      image.src = `data:image/png;base64,${encoded}`;
+      await image.decode();
+      const probe = document.createElement('canvas');
+      probe.width = image.width;
+      probe.height = image.height;
+      const context = probe.getContext('2d');
+      context.drawImage(image, 0, 0);
+      const data = context.getImageData(0, 0, probe.width, probe.height).data;
+      const counts = { background: 0, streets: 0, route: 0, marker: 0 };
+      const colors = { background: [32, 41, 45], streets: [70, 89, 96], route: [136, 136, 136], marker: [0, 124, 191] };
+      const entries = Object.entries(colors);
+      let markerX = 0;
+      let markerY = 0;
+      for (let index = 0; index < data.length; index += 4) {
+        for (const [name, color] of entries) {
+          if (color.every((value, channel) => Math.abs(value - data[index + channel]) <= 5)) {
+            counts[name] += 1;
+            if (name === 'marker') {
+              markerX += (index / 4) % probe.width;
+              markerY += Math.floor(index / 4 / probe.width);
+            }
+          }
+        }
+      }
+      return { width: probe.width, height: probe.height, counts,
+        markerCenter: counts.marker ? [markerX / counts.marker, markerY / counts.marker] : null };
+    }, png);
+    const centered = sample.markerCenter && Math.abs(sample.markerCenter[0] - sample.width / 2) <= 5
+      && Math.abs(sample.markerCenter[1] - sample.height / 2) <= 5;
+    const rendered = sample.counts.background >= 500 && sample.counts.streets >= 100
+      && sample.counts.route >= 20 && sample.counts.marker >= 20 && centered;
+    if (rendered || Date.now() >= deadline) return sample;
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    return sampleRenderedMap();
+  }
+  const pixels = await sampleRenderedMap();
+  result.map = { renderer, pixels, seekCoordinate: MAP_COORDS[4] };
+  assert(result.mapStyleRequests > 0 && result.mapCoordinateRequests > 0, 'Map fixture sources were not requested');
+  assert(pixels.counts.background >= 500 && pixels.counts.streets >= 100
+    && pixels.counts.route >= 20 && pixels.counts.marker >= 20,
+  `Actual Mapbox canvas did not render its background, streets, route, and seek marker: ${JSON.stringify(pixels)}`);
+  assert(Math.abs(pixels.markerCenter[0] - pixels.width / 2) <= 5
+    && Math.abs(pixels.markerCenter[1] - pixels.height / 2) <= 5, 'Map did not center on the paused route position');
+  await resetCaptureScroll(page);
+}
+
+async function verifyPausedResize(page, result) {
+  result.phase = 'paused responsive resize';
+  const reference = await mediaState(page);
+  result.resizes = [];
+  async function resize(width, height) {
+    const viewport = { width, height, deviceScaleFactor: 1 };
+    const previousCap = await page.$eval('.DriveView', (view) => view.style.getPropertyValue('--drive-video-height'));
+    await page.setViewport(viewport);
+    await resetCaptureScroll(page);
+    await page.waitForFunction((oldCap) => {
+      const view = document.querySelector('.DriveView');
+      const frame = view?.querySelector('.DriveVideo');
+      const controls = view?.querySelector('[aria-label="Playback controls"]');
+      if (!frame || !controls) return false;
+      const bounds = frame.getBoundingClientRect();
+      const controlBounds = controls.getBoundingClientRect();
+      const cap = view.style.getPropertyValue('--drive-video-height');
+      const drawerButton = document.querySelector('button[aria-label="menu"]');
+      const shellReady = innerWidth > 1080 ? !drawerButton : Boolean(drawerButton);
+      const fits = bounds.width > 0 && bounds.left >= 0 && bounds.right <= innerWidth
+        && controlBounds.left >= 0 && controlBounds.right <= innerWidth;
+      return shellReady && fits && (innerWidth >= 768
+        ? parseFloat(cap) > 0 && cap !== oldCap && controlBounds.bottom <= innerHeight - 16
+        : !cap && Math.abs(bounds.width - frame.parentElement.getBoundingClientRect().width) <= 1);
+    }, WAIT, previousCap);
+    result.resizes.push({ viewport, media: await retainedPlayback(page, reference),
+      heightCap: await page.$eval('.DriveView', (view) => view.style.getPropertyValue('--drive-video-height')),
+      geometry: await verifyPlaybackControls(page, `${result.name} resized ${viewport.width}x${viewport.height}`) });
+  }
+  await resize(390, 844);
+  await resize(1280, 800);
+  await resize(1280, 900);
+}
+
 async function runCase(browser, fixture, name, viewport, historyChecks = true) {
   const { assets, metadata } = fixture;
   const result = { name, viewport, checks: historyChecks ? 'decode, seek, fractional speed, paused/playing history and layout' : 'decode, seek, fractional speed and layout',
     intrinsicSize: [metadata.width, metadata.height], passed: false, phase: 'setup', sdkRequests: 0, manifestRequests: 0,
+    mapStyleRequests: 0, mapCoordinateRequests: 0,
     segments: [], backendRequests: [], athenaMethods: [], blockedExternal: [], pageErrors: [], requestErrors: [], consoleErrors: [] };
+  if (name === 'desktop') result.checks += ', paused resize roundtrip';
+  if (viewport.width >= 1536) result.checks += ', actual Mapbox rendering with synthetic streets and route';
   report.cases.push(result);
   let context;
   let page;
@@ -352,6 +494,7 @@ async function runCase(browser, fixture, name, viewport, historyChecks = true) {
     result.phase = 'timeline seek';
     await seekTimeline(page, 4);
     result.seek = await mediaState(page);
+    if (viewport.width >= 1536) await verifyRenderedMap(page, result);
     await verifySpeedSelection(page, result);
     if (historyChecks) {
       result.phase = 'open URL dialog';
@@ -370,6 +513,7 @@ async function runCase(browser, fixture, name, viewport, historyChecks = true) {
     } else {
       await verifyCaptureReady(page, result);
     }
+    if (name === 'desktop') await verifyPausedResize(page, result);
     result.phase = 'rendered geometry';
     result.geometry = await verifyPlaybackControls(page, name);
     assert(result.geometry.layout.decodedAspect?.matches, 'Decoded-video aspect was not verified');
