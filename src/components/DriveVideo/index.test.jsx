@@ -151,7 +151,7 @@ test('uses the latest seek before metadata and corrects delayed first-frame meta
   expect(video.play).not.toHaveBeenCalled();
 });
 
-test('paused seeks finish with one available frame and repeated targets do not stay loading', () => {
+test('paused seeks and speed changes preserve a stopped clock without leaving loading stuck', () => {
   const { video, store } = mountVideo();
   ready(video);
   act(() => store.dispatch(pause()));
@@ -161,8 +161,11 @@ test('paused seeks finish with one available frame and repeated targets do not s
   media(video, { readyState: 2 });
   fireEvent.seeked(video);
   act(() => store.dispatch(seek(17000)));
+  act(() => store.dispatch(setPlaybackSpeed(2)));
+  expect(video.playbackRate).toBe(2);
+  expect(video.paused).toBe(true);
   expect(video.currentTime).toBe(15);
-  expect(store.getState()).toMatchObject({ offset: 17000, isPlaying: false, videoStatus: 'ready' });
+  expect(store.getState()).toMatchObject({ offset: 17000, desiredPlaySpeed: 2, isPlaying: false, videoStatus: 'ready' });
   expect(video.play).toHaveBeenCalledTimes(plays);
 });
 
@@ -301,6 +304,8 @@ test('refreshing source credentials preserves the paused position and selected s
   ready(video);
   fireEvent.seeked(video);
   expect(video.currentTime).toBe(15);
+  expect(video.playbackRate).toBe(4);
+  expect(video.paused).toBe(true);
   expect(store.getState()).toMatchObject({ offset: 17000, desiredPlaySpeed: 4, isPlaying: false, videoStatus: 'ready' });
 });
 

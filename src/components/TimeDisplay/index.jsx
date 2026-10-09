@@ -38,7 +38,7 @@ const styles = (theme) => ({
   },
   recorded: {
     color: 'rgba(255,255,255,0.6)',
-    fontSize: 11,
+    fontSize: 12,
     lineHeight: '18px',
   },
   controls: {
@@ -73,7 +73,7 @@ const styles = (theme) => ({
   speed: {
     width: 56,
     padding: 4,
-    gap: 4,
+    '& > span': { gap: 4 },
     border: '1px solid rgba(255,255,255,0.15)',
     fontSize: 12,
     fontWeight: 600,
@@ -82,6 +82,7 @@ const styles = (theme) => ({
   speedMenu: { borderRadius: 12, minWidth: 120, border: '1px solid rgba(255,255,255,0.15)' },
   speedItem: {
     minHeight: 44,
+    boxSizing: 'border-box',
     fontVariantNumeric: 'tabular-nums',
     '&[aria-checked="true"]': { color: theme.palette.common.white, fontWeight: 700, backgroundColor: theme.palette.grey[800] },
     '&:hover, &:focus': { backgroundColor: theme.palette.grey[700] },
