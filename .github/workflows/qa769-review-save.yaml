@@ -1,0 +1,19 @@
+name: Save verified playback review blobs
+on:
+  push:
+    branches: [qa/769-review-save]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  save:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify artifact and save review blobs
+        env:
+          QA769_BLOB_TOKEN: ${{ github.token }}
+        run: python3 scripts/qa769-review-save.py
