@@ -156,6 +156,20 @@ test.each(['legacy', 'explicit'])('%s token URL has one pairing dialog and close
   expect(app.store.getState().draft).toBe(app.draft);
 });
 
+test.each(['missing', 'denied'])('a %s camera has an explicit Close action that preserves the underlying URL', async (failure) => {
+  if (failure === 'missing') camera.enumerateDevices.mockResolvedValue([]);
+  else camera.getUserMedia.mockRejectedValue(new DOMException('Permission denied', 'NotAllowedError'));
+  const app = renderPairing(`/${EXISTING}?x=1&dialog=pair#device`);
+  const message = failure === 'missing'
+    ? 'Camera not found, please enable camera access.'
+    : 'Camera access denied. Please allow camera access in your browser settings and try again.';
+  expect(await screen.findByText(message)).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  expect(app.history.location).toMatchObject({ pathname: `/${EXISTING}`, search: '?x=1', hash: '#device' });
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(api.devices.pilotPair).not.toHaveBeenCalled();
+});
+
 test('Back and Forward reuse a pending transaction and its completed result while preserving the page', async () => {
   const pairing = deferred();
   api.devices.pilotPair.mockReturnValueOnce(pairing.promise);

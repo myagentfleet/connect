@@ -12,6 +12,7 @@ import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
 import puppeteer from 'puppeteer';
 import { build, preview } from 'vite';
+import { verifyClipPlayback, verifyPlaybackControls } from './gallery-checks.mjs';
 
 const ROUTE_NAME = '5beb9b58bd12b691|0000010a--a51155e496';
 const [DONGLE_ID, LOG_ID] = ROUTE_NAME.split('|');
@@ -149,6 +150,17 @@ const GALLERY_STATES = [
     modalText: 'Downloading · 0%',
   },
   {
+    name: 'clip-viewer-ready-url',
+    label: 'Clip viewer (playback and seek verified)',
+    page: 'drive',
+    path: `${CLIP_ROUTE_PATH}?dialog=clip&clip=${CLIP_FILENAME}`,
+    clips: true,
+    clipPlayback: true,
+    newUrlState: true,
+    readySelector: '[role="dialog"] video',
+    modalText: 'coastal-drive',
+  },
+  {
     name: 'clip-viewer-missing-url',
     label: 'Missing clip (direct link)',
     page: 'drive',
@@ -192,9 +204,14 @@ const GALLERY_STATES = [
 const GALLERY_VIEWPORTS = [
   { name: 'desktop', width: 1280, height: 800 },
   { name: 'mobile', width: 390, height: 844 },
+  { name: 'narrow', width: 320, height: 700, states: ['drive'] },
 ];
 
 const execute = promisify(execFile);
+
+function viewportsForState(state) {
+  return GALLERY_VIEWPORTS.filter((viewport) => !viewport.states || viewport.states.includes(state.name));
+}
 
 function parseArgs(argv) {
   const values = {};
@@ -241,7 +258,7 @@ async function downloadBaseline(baselineUrl, destination) {
   }
 
   await mkdir(destination, { recursive: true });
-  const downloads = GALLERY_STATES.flatMap((state) => GALLERY_VIEWPORTS.map(async (viewport) => {
+  const downloads = GALLERY_STATES.flatMap((state) => viewportsForState(state).map(async (viewport) => {
     const capture = manifest.captures.find((item) => (
       item.state === state.name && item.viewport === viewport.name
     ));
@@ -290,6 +307,7 @@ async function fetchFixtures() {
       },
     }))),
     sprite: Buffer.from(await sprite.arrayBuffer()),
+    clip: await readFile(new URL('./fixtures/gallery-test-pattern.mp4', import.meta.url)),
   };
 }
 
@@ -506,17 +524,27 @@ async function mockGalleryRequest(request, origin, pageName, fixtures, state) {
             route: LOG_ID,
             camera: 'fcamera.hevc',
             source_start_time: 10,
-            source_end_time: 30,
+            source_end_time: state.clipPlayback ? 12 : 30,
             speedup: 1,
-            size: 2 * 1024 * 1024,
+            size: state.clipPlayback ? fixtures.clip.length : 2 * 1024 * 1024,
           }],
           cameras: Object.fromEntries(['fcamera.hevc', 'ecamera.hevc', 'dcamera.hevc']
             .map((camera) => [camera, { available_ranges: [[0, 60]] }])),
         } });
       }
-      // There is no local video fixture. Capture the real pending download UI;
-      // do not substitute an empty blob and imply that playback was verified.
-      if (payload.method === 'getClipChunk') return undefined;
+      if (payload.method === 'getClipChunk') {
+        // Keep the pending state separate from the real decoder/seek check.
+        if (!state.clipPlayback) return undefined;
+        const { filename, offset } = payload.params;
+        if (filename !== CLIP_FILENAME || !Number.isSafeInteger(offset) || offset < 0 || offset >= fixtures.clip.length) {
+          throw new Error(`Invalid clip chunk request in ${state.name}`);
+        }
+        return jsonResponse(request, { result: {
+          size: fixtures.clip.length,
+          offset,
+          data: fixtures.clip.subarray(offset, offset + 4096).toString('base64'),
+        } });
+      }
       if (['createClip', 'deleteClip'].includes(payload.method)) {
         throw new Error(`Unexpected clip mutation in ${state.name}: ${payload.method}`);
       }
@@ -671,7 +699,7 @@ async function openGalleryModal(page, state, label) {
   });
 }
 
-async function captureOne(browser, origin, outputPath, state, viewport, fixtures) {
+async function captureOne(browser, origin, outputPath, state, viewport, fixtures, verifyCurrent) {
   const context = await browser.createBrowserContext();
   const page = await context.newPage();
   const failures = [];
@@ -831,6 +859,8 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
     ` });
     const label = `${state.name}/${viewport.name}`;
     await openGalleryModal(page, state, label);
+    if (verifyCurrent && state.name === 'drive') await verifyPlaybackControls(page, label);
+    if (state.clipPlayback) await verifyClipPlayback(page, label);
     const buffer = await waitForStableFrames(page, label);
     if (failures.length) throw new Error(`${label}: ${failures.join('; ')}`);
     assertNotBlank(buffer, label);
@@ -865,12 +895,12 @@ async function captureRenderers(renderers, output, fixtures) {
       // A local pre-change checkout does not implement the new direct-link states.
       // Every current capture remains required; unavailable baselines are labeled in the report.
       const states = renderer.name === 'base' ? GALLERY_STATES.filter((state) => !state.newUrlState) : GALLERY_STATES;
-      const pending = states.flatMap((state) => GALLERY_VIEWPORTS.map((viewport) => ({ state, viewport })));
+      const pending = states.flatMap((state) => viewportsForState(state).map((viewport) => ({ state, viewport })));
       await Promise.all(Array.from({ length: CAPTURE_CONCURRENCY }, async () => {
         while (pending.length) {
           const { state, viewport } = pending.shift();
           const filename = captureFilename(state.name, viewport.name);
-          await captureOne(browser, server.origin, resolve(destination, filename), state, viewport, fixtures);
+          await captureOne(browser, server.origin, resolve(destination, filename), state, viewport, fixtures, renderer.name === 'current');
           console.log(`Captured ${renderer.name}/${filename}`);
         }
       }));
@@ -1029,7 +1059,7 @@ async function buildReport(captures, output, headSha, baseSha, baselineUrl, arti
 
   const results = [];
   for (const state of GALLERY_STATES) {
-    for (const viewport of GALLERY_VIEWPORTS) {
+    for (const viewport of viewportsForState(state)) {
       const filename = captureFilename(state.name, viewport.name);
       const currentSource = resolve(currentDirectory, filename);
       const currentAsset = `./connect-gallery-assets/current/${filename}`;

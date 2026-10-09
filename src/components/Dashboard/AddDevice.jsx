@@ -491,6 +491,7 @@ class AddDevice extends Component {
                   You can also scan the QR code using any other QR code
                   reader application.
                 </Typography>
+                <Button className={ classes.retryButton } onClick={ this.modalClose }>Close</Button>
               </>
             )
             : (

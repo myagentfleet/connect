@@ -45,6 +45,18 @@ const styles = (theme) => ({
       height: 50,
       paddingBottom: 0,
       paddingTop: 0,
+      '@media (max-width: 400px)': {
+        flexWrap: 'wrap',
+        height: 'auto',
+        justifyContent: 'space-between',
+        paddingBottom: theme.spacing.unit,
+        paddingTop: theme.spacing.unit,
+        '& $currentTime': {
+          flexBasis: '100%',
+          margin: '0 0 4px',
+          order: -1,
+        },
+      },
     },
   },
   desiredPlaySpeedContainer: {
@@ -91,6 +103,8 @@ const styles = (theme) => ({
     margin: `0 ${theme.spacing.unit * 1}px`,
     fontSize: 15,
     fontWeight: 500,
+    fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
     display: 'block',
     flexGrow: 1,
   },
@@ -228,7 +242,7 @@ class TimeDisplay extends Component {
     const isExpandedCls = zoom ? 'isExpanded' : '';
     const isThinCls = isThin ? 'isThin' : '';
     return (
-      <div className={ `${classes.base} ${isExpandedCls} ${isThinCls}` }>
+      <div className={ `${classes.base} ${isExpandedCls} ${isThinCls}` } role="group" aria-label="Playback controls">
         <div className={ classes.rightBorderBox }>
           <IconButton
             className={ classes.iconButton }
