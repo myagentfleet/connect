@@ -27,6 +27,7 @@ const viewports = [320, 390, 1280, 1600].map((width) => ({ width, height: width 
 const report = {
   started: new Date().toISOString(), revision: process.env.QA769_REVISION_LABEL || 'candidate',
   captureOnly, caseFilter, headless, cases: [], layouts: [], screenshots: [],
+  playbackVerification: 'Require 200ms without a seek or invalid playback state, media-clock advancement above 0.15s, and new decoded frames after that baseline.',
   scope: 'Production build, real Google Chrome, native media events, checked-in H.264/AAC MPEG-TS fixtures, UI-only playback commands. The explicitly labeled MSE scenario overrides only HLS capability discovery to exercise hls.js.',
   fixtures: 'Public-route metadata is deterministic; exact missing fragment URLs receive HTTP 404 via request interception, or real TS bytes after repair. Mapbox style is a plain deterministic background; the production WebGL route and marker render normally.',
   omissions: ['Native Safari/iOS/Android and installed PWAs', 'Physical audio output, Bluetooth, background/foreground and OS media controls', 'Production map tiles and real driving footage', 'Deterministically delayed native play promise rejection (covered separately by unit tests)'],
@@ -64,15 +65,25 @@ async function textButton(page, text) {
 }
 
 async function playing(page) {
+  await page.evaluate(() => { globalThis.qaPlaybackProbe = null; });
   await page.waitForFunction((selector) => {
     const video = document.querySelector(selector);
-    return video && !video.paused && !video.seeking && video.readyState >= 2 && video.videoWidth > 0;
+    if (!video || video.paused || video.seeking || video.readyState < 2 || video.videoWidth === 0) {
+      globalThis.qaPlaybackProbe = null;
+      return false;
+    }
+    const id = video.dataset.qaVideo;
+    const seeks = globalThis.qaEvents.filter((event) => event.id === id && event.type === 'seeking').length;
+    const sample = { id, seeks, at: performance.now(), time: video.currentTime,
+      frames: video.getVideoPlaybackQuality?.().totalVideoFrames || 0 };
+    const before = globalThis.qaPlaybackProbe;
+    // A seek can advance time and decode a frame without starting continuous playback.
+    if (!before || before.id !== id || before.seeks !== seeks) {
+      globalThis.qaPlaybackProbe = sample;
+      return false;
+    }
+    return sample.at - before.at >= 200 && sample.time > before.time + 0.15 && sample.frames > before.frames;
   }, {}, VIDEO);
-  const before = await media(page);
-  await page.waitForFunction(({ selector, time, frames }) => {
-    const video = document.querySelector(selector);
-    return video.currentTime > time + 0.15 && (video.getVideoPlaybackQuality?.().totalVideoFrames || 0) > frames;
-  }, {}, { selector: VIDEO, time: before.time, frames: before.frames });
 }
 
 async function pause(page) {
