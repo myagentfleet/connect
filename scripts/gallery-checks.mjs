@@ -53,18 +53,32 @@ export async function verifyPlaybackControls(page, label) {
     const lines = Array.from(range.getClientRects()).filter((rect) => rect.width > 0);
     const bounds = group.getBoundingClientRect();
     const within = (rect) => rect.width > 0 && rect.height > 0
-      && rect.left >= 0 && rect.right <= innerWidth
+      && rect.left >= Math.max(0, bounds.left) && rect.right <= Math.min(innerWidth, bounds.right)
       && rect.top >= bounds.top && rect.bottom <= bounds.bottom;
     const buttons = Array.from(group.querySelectorAll('button'));
+    const buttonBounds = buttons.map((button) => button.getBoundingClientRect());
+    const actionBounds = buttons.filter((button) => !button.getAttribute('aria-label')?.includes('play speed'))
+      .map((button) => button.getBoundingClientRect());
+    const readoutBounds = readout.getBoundingClientRect();
+    const actionCenters = actionBounds.map((rect) => (rect.top + rect.bottom) / 2);
+    const twoRows = innerWidth > 400 || (
+      readoutBounds.bottom <= Math.min(...buttonBounds.map((rect) => rect.top))
+      && Math.abs((readoutBounds.left + readoutBounds.right) / 2 - (bounds.left + bounds.right) / 2) <= 1
+      && Math.max(...actionCenters) - Math.min(...actionCenters) <= 1
+    );
+    const video = document.querySelector('.DriveView video');
+    const videoBounds = video?.getBoundingClientRect();
     return {
       width: innerWidth,
       singleLine: lines.length === 1,
       readoutFits: lines.every(within),
-      controlsFit: buttons.length >= 5 && buttons.every((button) => within(button.getBoundingClientRect())),
+      controlsFit: buttons.length >= 5 && buttonBounds.every(within),
+      twoRows,
+      videoFits: Boolean(videoBounds && videoBounds.width > 0 && videoBounds.left >= 0 && videoBounds.right <= innerWidth),
     };
   });
-  if (!result.singleLine || !result.readoutFits || !result.controlsFit) {
-    throw new Error(`${label}: playback controls overflow or wrap: ${JSON.stringify(result)}`);
+  if (!result.singleLine || !result.readoutFits || !result.controlsFit || !result.twoRows || !result.videoFits) {
+    throw new Error(`${label}: playback layout is clipped or misaligned: ${JSON.stringify(result)}`);
   }
   console.log(`Verified playback controls for ${label}: ${JSON.stringify(result)}`);
 }

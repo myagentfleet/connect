@@ -51,11 +51,6 @@ const styles = (theme) => ({
         justifyContent: 'space-between',
         paddingBottom: theme.spacing.unit,
         paddingTop: theme.spacing.unit,
-        '& $currentTime': {
-          flexBasis: '100%',
-          margin: '0 0 4px',
-          order: -1,
-        },
       },
     },
   },
@@ -107,6 +102,13 @@ const styles = (theme) => ({
     whiteSpace: 'nowrap',
     display: 'block',
     flexGrow: 1,
+    '@media (max-width: 400px)': {
+      '.isThin &': {
+        flexBasis: '100%',
+        margin: '0 0 4px',
+        order: -1,
+      },
+    },
   },
 });
 
