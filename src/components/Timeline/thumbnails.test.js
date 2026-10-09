@@ -76,67 +76,34 @@ describe('timeline thumbnails', () => {
     });
   });
 
-  it('doesn\'t render before bounds are set', () => {
+  it.each([
+    ['before bounds are set', { width: 0, height: 0, left: 0, right: 0, top: 0, bottom: 0 }],
+    ['with zero width', { width: 0, height: 100, left: 10, right: 10, top: 100, bottom: 100 }],
+  ])('does not render %s', (_, thumbnail) => {
     render(React.createElement(Thumbnails, {
-      thumbnail: {
-          width: 0,
-          height: 0,
-          left: 0,
-          right: 0,
-          top: 0,
-          bottom: 0,
-      },
+      thumbnail,
       percentToOffset: percentToOffsetMock,
       currentRoute: mockRoute,
     }));
 
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    expect(percentToOffsetMock).not.toHaveBeenCalled();
   });
 
-  it('works when theres no blank at the end', () => {
-    const route = {
-      offset: 1600,
-      segment_numbers: Array.from(Array(4).keys()),
-      segment_offsets: Array.from(Array(4).keys()).map((i) => i * 60),
-    };
-
+  it('renders one unstyled blank strip when no route is available', () => {
     render(React.createElement(Thumbnails, {
       thumbnail: thumbnailBounds,
       percentToOffset: percentToOffsetMock,
-      currentRoute: route,
+      currentRoute: null,
     }));
 
-    expect(percentToOffsetMock.mock.calls.length).toBe(10);
-    const imageEntries = screen.getAllByRole('img');
-    expect(imageEntries).toHaveLength(5);
-
-    imageEntries.forEach((entry, i) => {
-      expect([...entry.classList].indexOf('thumbnailImage')).toBeGreaterThan(-1);
-
-      const backgroundParts = entry.style.backgroundSize.split(' ');
-      const height = Number(backgroundParts[1].replace('px', ''));
-      expect(height).toBe(heightWithBlackBorder);
-
-      // never stretch thumbnail images
-      expect(backgroundParts[0]).toBe('auto');
-    });
+    const blank = screen.getByRole('img');
+    expect(blank).toHaveClass('thumbnailImage', 'blank');
+    expect(blank.style.width).toBe('1600px');
+    expect(blank.style.height).toBe('100px');
+    expect(blank.style.backgroundImage).toBe('');
+    expect(blank.style.backgroundPositionX).toBe('');
+    expect(percentToOffsetMock).toHaveBeenCalledTimes(10);
   });
 
-  it('works when it\'s supermegaskinny', () => {
-    render(React.createElement(Thumbnails, {
-      thumbnail: {
-          width: 0,
-          height: 100,
-          left: 10,
-          right: 10,
-          top: 100,
-          bottom: 100,
-      },
-      percentToOffset: percentToOffsetMock,
-      currentRoute: mockRoute,
-    }));
-
-    expect(screen.queryByRole('img')).not.toBeInTheDocument();
-    expect(percentToOffsetMock.mock.calls.length).toBe(0);
-  });
 });

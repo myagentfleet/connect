@@ -59,32 +59,15 @@ describe('playback', () => {
     expect(state.loop.duration).toEqual(1000);
   });
 
-  it('clamps seek requests after the selection end', () => {
-    let state = makeDefaultStruct();
-
-    state = reducer(state, selectLoop(
-      1000,
-      2000,
-    ));
+  it.each([
+    ['after the end', 3000, 2000],
+    ['before the start', 0, 1000],
+  ])('clamps a seek %s of the selection', (_boundary, target, expected) => {
+    let state = reducer(makeDefaultStruct(), selectLoop(1000, 2000));
     expect(state.loop.startTime).toEqual(1000);
-
-    state = reducer(state, seek(3000));
+    state = reducer(state, seek(target));
     expect(state.loop.startTime).toEqual(1000);
-    expect(state.offset).toEqual(2000);
-  });
-
-  it('clamps seek requests before the selection start', () => {
-    let state = makeDefaultStruct();
-
-    state = reducer(state, selectLoop(
-      1000,
-      2000,
-    ));
-    expect(state.loop.startTime).toEqual(1000);
-
-    state = reducer(state, seek(0));
-    expect(state.loop.startTime).toEqual(1000);
-    expect(state.offset).toEqual(1000);
+    expect(state.offset).toEqual(expected);
   });
 
   it('keeps the chosen speed during buffering', () => {
