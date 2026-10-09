@@ -544,6 +544,7 @@ async function main() {
       await capture(page, `${name}-failure`, true).catch(() => {});
     } finally {
       result.mediaEvents = await page.evaluate(() => globalThis.qaEvents).catch(() => []);
+      if (result.startup) result.startup.presentedFrames = await page.evaluate(() => globalThis.qaStartupFrames || []).catch(() => []);
       result.finalText = await page.$eval('body', (body) => body.innerText).catch(() => '');
       result.finalMedia = await media(page).catch(() => null);
       for (const request of result.held) await request.abort('aborted').catch(() => {});
@@ -731,6 +732,88 @@ async function main() {
         await eventually(() => result.requests.length > count, 'Retry reattempts a still-missing fragment'); await errorVisible(page);
         await settledAt(page, await seek(page, 125)); await click(page, 'button[aria-label="Play"]'); await playing(page);
       }, { forceMse: true });
+
+      await scenario('startup-seek-and-route-reset', async ({ page, result, openRoute, respond }) => {
+        result.startup = { requests: [], released: [], cancelled: [] };
+        await openRoute('complete'); await playing(page); await speed(page, 8);
+        // Natural progress keeps seekRequest null, so its reset cannot mask a stale mount offset.
+        await page.waitForFunction((selector) => document.querySelector(selector).currentTime > 65, {}, VIDEO);
+        await pause(page);
+        result.startup.previousRoute = await media(page);
+        assert.ok(result.startup.previousRoute.time > 65 && result.startup.previousRoute.time < 120,
+          'The previous route has naturally advanced into its second segment');
+        const oldVideo = await page.$(VIDEO);
+        await click(page, '.DriveView [aria-label="Close"]');
+        assert.equal(await oldVideo.evaluate((element) => element.isConnected), false, 'Closing disconnects the previous media');
+        page.on('request', (request) => {
+          if (request.method() === 'GET' && new URL(request.url()).pathname.endsWith('/qcamera.ts')) {
+            result.startup.requests.push({ at: Date.now(), url: request.url() });
+          }
+        });
+        const firstUrl = [...missing.keys()].find((url) => new URL(url).pathname.endsWith('/0/qcamera.ts'));
+        assert.ok(firstUrl, 'The existing missing-first fixture provides segment zero');
+        result.hold = true; await openRoute('first');
+        await eventually(() => result.held.length, 'The new route requests its held first fragment');
+        assert.equal(result.startup.requests[0]?.url, firstUrl, 'The first requested fragment belongs to the new route start, not the old clock');
+        await page.waitForSelector('[aria-label="Loading video"]', { visible: true });
+        result.startup.initial = await media(page);
+        assert.equal(result.startup.initial.ready, 0, 'Initial media is held before metadata');
+        assert.equal(result.startup.initial.frames, 0, 'No old-route frame is decoded by the new video');
+        assert.equal(await page.$eval(TIMELINE, (element) => Number(element.getAttribute('aria-valuenow'))), 0,
+          'The new timeline resets before any seek command');
+        const video = await page.$(VIDEO);
+        await video.evaluate((element) => {
+          if (typeof element.requestVideoFrameCallback !== 'function') throw new Error('Presented-frame timestamps are required');
+          globalThis.qaStartupFrames = [];
+          const observe = (at, frame) => {
+            globalThis.qaStartupFrames.push({ at, mediaTime: frame.mediaTime, presentedFrames: frame.presentedFrames,
+              id: element.dataset.qaVideo, currentTime: element.currentTime, paused: element.paused });
+            if (element.isConnected) element.requestVideoFrameCallback(observe);
+          };
+          element.requestVideoFrameCallback(observe);
+        });
+        await seek(page, 15);
+        const target = await seek(page, 25);
+        await pause(page);
+        result.startup.target = target;
+        result.startup.pending = await media(page);
+        assert.equal(result.startup.pending.ready, 0, 'Both seek commands occur before metadata');
+        assert.equal(result.startup.pending.frames, 0, 'Pending seek intent does not imply a decoded frame');
+        assert.ok(Math.abs(await page.$eval(TIMELINE, (element) => Number(element.getAttribute('aria-valuenow'))) - target) < 0.01,
+          'The timeline retains the latest pending seek');
+        await capture(page, 'startup-seek-loading', true);
+        const releasedAt = await page.evaluate(() => performance.now());
+        result.healed.add(firstUrl); result.hold = false;
+        for (const request of result.held.splice(0)) {
+          if (request.failure()?.errorText === 'net::ERR_ABORTED') {
+            result.startup.cancelled.push(request.url());
+            continue;
+          }
+          try {
+            await respond(request, missing.get(request.url()), 200, 'video/mp2t');
+            result.startup.released.push(request.url());
+          } catch (error) {
+            if (request.failure()?.errorText !== 'net::ERR_ABORTED') throw error;
+            result.startup.cancelled.push(request.url());
+          }
+        }
+        await settledAt(page, target);
+        await page.waitForFunction(({ target, releasedAt }) => {
+          const frame = globalThis.qaStartupFrames.at(-1);
+          return frame && frame.at >= releasedAt && Math.abs(frame.mediaTime - target) < 0.6;
+        }, {}, { target, releasedAt });
+        assert.equal(await video.evaluate((element, selector) => element === document.querySelector(selector), VIDEO), true,
+          'Releasing delayed media preserves the same video element');
+        result.startup.settled = await media(page);
+        assert.notEqual(result.startup.settled.id, result.startup.previousRoute.id, 'The new route owns a distinct media element');
+        await delay(400);
+        const stopped = await media(page);
+        assert.equal(stopped.paused, true, 'Completing a delayed seek preserves the requested pause');
+        assert.ok(Math.abs(stopped.time - result.startup.settled.time) < 0.05, 'The paused media clock stays stopped');
+        await capture(page, 'startup-seek-paused', true);
+        await click(page, 'button[aria-label="Play"]'); await playing(page);
+        result.startup.resumed = await media(page);
+      });
 
       await scenario('navigation-cancellation-and-loading', async ({ page, result, openRoute, respond }) => {
         result.hold = true; await openRoute('first');

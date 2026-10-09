@@ -1,5 +1,5 @@
 # Validation only: publish separately from the fix PR.
-name: qa769-modern
+name: qa769-modern-stall
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      FINAL_CANDIDATE_SHA: ff8654bd8faf4e9b4de121bb1b188a7be7e1e745
+      FINAL_CANDIDATE_SHA: 78a13db35e4c7f9aa1e90e03bcf3dc1793c051b9
       QA769_HEADLESS: 'false'
       QA769_REVISION_LABEL: candidate
       QA769_CAPTURE_ONLY: 'false'
@@ -64,6 +64,24 @@ jobs:
         run: bun add --no-save --trust puppeteer@24.16.0 pngjs@7.0.0 2>&1 | tee "$QA769_OUTPUT/browser-tools.log"
       - name: Exercise headed Chrome with a desktop display
         run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" node scripts/qa769-modern.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
+      - name: Verify all seven Chrome scenarios ran without a case filter
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import { resolve } from 'node:path';
+          const report = JSON.parse(readFileSync(resolve(process.env.QA769_OUTPUT, 'report.json'), 'utf8'));
+          assert.equal(report.caseFilter, null);
+          assert.equal(report.captureOnly, false);
+          assert.deepEqual(report.cases.map(({ name }) => name).sort(), [
+            'comparison-healthy-player', 'controls-and-responsive', 'missing-first-and-retry',
+            'natural-chrome-middle-gap-recovery', 'forced-mse-prefetch-and-loops',
+            'startup-seek-and-route-reset', 'navigation-cancellation-and-loading',
+          ].sort());
+          assert.ok(report.cases.every(({ status }) => status === 'passed'));
+          assert.equal(report.passed, true);
+          console.log('All seven full Chrome scenarios passed without filtering.');
+          JS
       - name: Upload diagnostics even on failure
         if: always()
         uses: actions/upload-artifact@v4
@@ -73,26 +91,27 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  mount-regression:
+
+  hls-stall-regression:
     if: github.ref == 'refs/heads/qa/769-modern'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
-      OLD_CANDIDATE_SHA: 8eaa650615151569cb00eba21c79e167e969d9e6
-      NEW_CANDIDATE_SHA: ff8654bd8faf4e9b4de121bb1b188a7be7e1e745
-      EXPECTED_TEST_BLOB: ac559b314a41f7561e8509dcc819cd445aea68de
-      QA769_OUTPUT: ${{ github.workspace }}/results/mount-regression
+      OLD_CANDIDATE_SHA: ff8654bd8faf4e9b4de121bb1b188a7be7e1e745
+      NEW_CANDIDATE_SHA: 78a13db35e4c7f9aa1e90e03bcf3dc1793c051b9
+      EXPECTED_TEST_BLOB: 5afbc38bcc43a20c3e9d283dcdc4f4670ab4fddf
+      QA769_OUTPUT: ${{ github.workspace }}/results/hls-stall-regression
     defaults:
       run:
         shell: bash
         working-directory: application
     steps:
-      - name: Checkout validation harness containing the new regression tests
+      - name: Checkout validation branch containing the exact new regression test
         uses: actions/checkout@v4
         with:
           path: harness
           persist-credentials: false
-      - name: Checkout unchanged old application
+      - name: Checkout unchanged previous application
         uses: actions/checkout@v4
         with:
           ref: ${{ env.OLD_CANDIDATE_SHA }}
@@ -108,18 +127,20 @@ jobs:
           mkdir -p "$QA769_OUTPUT"
           git rev-parse HEAD > "$QA769_OUTPUT/old-source-sha.txt"
           git rev-parse HEAD:src/components/DriveVideo/index.jsx > "$QA769_OUTPUT/old-controller-blob.txt"
+          git rev-parse HEAD:src/components/DriveVideo/stream.js > "$QA769_OUTPUT/old-stream-blob.txt"
           git -C ../harness rev-parse HEAD > "$QA769_OUTPUT/harness-sha.txt"
           printf '%s\n' "$NEW_CANDIDATE_SHA" > "$QA769_OUTPUT/new-test-source-sha.txt"
+          printf '%s\n' 'https://github.com/myagentfleet/connect/actions/runs/37894173038' > "$QA769_OUTPUT/preserved-mount-regression.txt"
           cp ../harness/src/components/DriveVideo/index.test.jsx src/components/DriveVideo/index.test.jsx
           git hash-object src/components/DriveVideo/index.test.jsx > "$QA769_OUTPUT/new-test-blob.txt"
           test "$(git diff --name-only)" = 'src/components/DriveVideo/index.test.jsx'
           git diff --exit-code -- . ':!src/components/DriveVideo/index.test.jsx'
-      - name: Install old revision's frozen dependencies
+      - name: Install previous revision's frozen dependencies
         run: bun install --frozen-lockfile 2>&1 | tee "$QA769_OUTPUT/install.log"
-      - name: Prove all four mount-position assertions fail on the old controller
+      - name: Prove the new HLS waiting assertion fails on the unchanged previous source
         run: |
           set +e
-          bun run test src/components/DriveVideo/index.test.jsx --testNamePattern='at the reset position before metadata' --reporter=json --outputFile="$QA769_OUTPUT/regression.json" 2>&1 | tee "$QA769_OUTPUT/test.log"
+          bun run test src/components/DriveVideo/index.test.jsx --testNamePattern='^advancing media clears HLS waiting without a matching playing event$' --reporter=json --outputFile="$QA769_OUTPUT/regression.json" 2>&1 | tee "$QA769_OUTPUT/test.log"
           test_status=${PIPESTATUS[0]}
           set -e
           printf '%s\n' "$test_status" > "$QA769_OUTPUT/test-exit-code.txt"
@@ -129,35 +150,31 @@ jobs:
           import { readFileSync } from 'node:fs';
           import { resolve } from 'node:path';
           const report = JSON.parse(readFileSync(resolve(process.env.QA769_OUTPUT, 'regression.json'), 'utf8'));
-          assert.equal(report.numFailedTests, 4, 'Exactly four regression assertions must fail');
-          assert.equal(report.numPassedTests, 0, 'No selected case may pass on the old controller');
+          assert.equal(report.numFailedTests, 1, 'Exactly one regression assertion must fail');
+          assert.equal(report.numPassedTests, 0, 'No selected case may pass on the unchanged previous source');
           assert.equal(report.success, false);
+          assert.equal(report.numFailedTestSuites, 1);
+          assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0, 'Runtime or collection errors are not regression proof');
           assert.equal(report.testResults.length, 1, 'Only the requested test file runs');
           const file = report.testResults[0];
           assert.equal(file.message, '', 'Collection or module errors are not regression proof');
           const failures = file.assertionResults.filter(({ status }) => status === 'failed');
-          assert.equal(failures.length, 4);
-          assert.equal(report.numPendingTests, file.assertionResults.length - 4);
+          assert.equal(failures.length, 1);
+          assert.equal(report.numPendingTests, file.assertionResults.length - 1);
           assert.ok(file.assertionResults.filter(({ status }) => status !== 'failed').every(({ status }) => ['pending', 'skipped'].includes(status)));
-          const messages = failures.map(({ title, failureMessages }) => {
-            assert.match(title, /^starts (native|MSE) at the reset position before metadata/);
-            const message = failureMessages.join('\n').replace(/\u001b\[[0-9;]*m/g, '');
-            assert.match(message, /AssertionError: expected (123 to be \+?0|58 to be 18)\b/);
-            console.log(`${title}\n${message}`);
-            return message;
-          });
-          assert.equal(failures.filter(({ title }) => title.startsWith('starts native ')).length, 2);
-          assert.equal(failures.filter(({ title }) => title.startsWith('starts MSE ')).length, 2);
-          assert.equal(messages.filter((message) => /expected 123 to be \+?0\b/.test(message)).length, 2);
-          assert.equal(messages.filter((message) => /expected 58 to be 18\b/.test(message)).length, 2);
-          console.log('Confirmed: four numeric mount-position regressions fail on the unchanged old controller.');
+          const failure = failures[0];
+          assert.equal(failure.title, 'advancing media clears HLS waiting without a matching playing event');
+          const message = failure.failureMessages.join('\n').replace(/\u001b\[[0-9;]*m/g, '');
+          assert.match(message, /AssertionError: expected ['"]ready['"] to be ['"]loading['"]/);
+          console.log(`${failure.title}\n${message}`);
+          console.log('Confirmed: unchanged previous source stays ready when the new HLS waiting assertion requires loading.');
           JS
           git diff --exit-code -- . ':!src/components/DriveVideo/index.test.jsx'
       - name: Upload regression proof even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa769-mount-regression-${{ github.run_id }}
-          path: results/mount-regression
+          name: qa769-hls-stall-regression-${{ github.run_id }}
+          path: results/hls-stall-regression
           if-no-files-found: warn
           retention-days: 7
