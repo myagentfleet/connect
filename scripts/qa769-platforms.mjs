@@ -25,7 +25,7 @@ const link = (kind) => `.DriveEntry[href="/deadbeefdeadbeef/00000000--${String(i
 const report = {
   started: new Date().toISOString(), engine, nativeProfile, caseFilter, hostOS: process.platform,
   acceptanceRun: process.env.QA769_DIAGNOSTIC_ONLY !== 'true',
-  scope: 'Production build, Playwright-patched browser engine, real media decoding and native media clock. All transport commands use application controls.',
+  scope: 'Production build, Playwright-patched browser engine, real media decoding and native media clock. Application cases use UI controls; the explicitly labeled plain-video reference uses scripted native media commands without application code.',
   profile: nativeProfile ? 'macOS WebKit with Playwright iPhone 13 emulation; requires native HLS. This is not physical iOS or branded Safari.' : 'Unmodified desktop browser capabilities; application selects its normal transport.',
   fixtures: 'Checked-in H.264/AAC MPEG-TS bytes. A local HTTP server supplies manifests, real 404 responses, repaired bytes and held requests, including byte ranges; only API metadata and map style are browser-intercepted.',
   omissions: ['Stock Firefox and branded Safari (Playwright uses patched engines)', 'Physical iOS/Android and installed PWAs',
@@ -176,6 +176,15 @@ async function main() {
   const fixturePlugin = { name: 'qa-real-http-fixtures', configurePreviewServer(server) {
     server.middlewares.use((req, res, next) => {
       const path = new URL(req.url, 'http://localhost').pathname;
+      if (path === '/__qa-reference') {
+        respond(req, res, `<!doctype html><html lang="en"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1"><title>Native HLS reference</title>
+          <style>body{margin:16px;font:16px sans-serif}video{display:block;width:100%;max-width:640px}</style></head>
+          <body><h1>Plain native video reference</h1><p>macOS WebKit with iPhone emulation. No connect application code.</p>
+          <main class="DriveView"><video controls playsinline muted preload="auto" src="/demo-video/missing-middle.m3u8"></video></main>
+          </body></html>`, 200, 'text/html');
+        return;
+      }
       if (path.startsWith('/__qa/')) {
         const [, , sessionId, ...parts] = path.split('/');
         const session = sessions.get(sessionId), file = parts.join('/');
@@ -221,13 +230,13 @@ async function main() {
     // Standard Playwright launch; no browser security flags or media capability overrides.
     browser = await ({ firefox, webkit }[engine]).launch({ headless: false });
     report.browserVersion = browser.version();
-    async function scenario(name, run, { diagnostic = false } = {}) {
+    async function scenario(name, run, { diagnostic = false, reference = false } = {}) {
       if (requestedCases && !requestedCases.includes(name)) return;
       const context = await browser.newContext({ ...(nativeProfile ? devices['iPhone 13'] : { viewport: { width: 1280, height: 800 } }),
         timezoneId: 'America/Los_Angeles', serviceWorkers: 'block' });
       const page = await context.newPage();
       page.setDefaultTimeout(20000);
-      const result = { name, status: 'running', diagnostic, pageErrors: [], console: [], requestFailures: [], httpRequests: [] };
+      const result = { name, status: 'running', diagnostic, reference, pageErrors: [], console: [], requestFailures: [], httpRequests: [] };
       const session = { id: String(report.cases.length + 1), result, healed: new Set(), held: [], hold: false };
       sessions.set(session.id, session); active = session; report.cases.push(result);
       page.on('pageerror', (error) => result.pageErrors.push(error.message));
@@ -304,8 +313,8 @@ async function main() {
           if (url.hostname.endsWith('mapbox.com')) return fulfill('', 204);
           result.console.push(`Blocked external request: ${url.origin}${url.pathname}`); return route.abort('blockedbyclient');
         });
-        await page.goto(`${origin}/demo`, { waitUntil: 'domcontentloaded' });
-        await page.locator(link('complete')).waitFor();
+        await page.goto(`${origin}/${reference ? '__qa-reference' : 'demo'}`, { waitUntil: 'domcontentloaded' });
+        await page.locator(reference ? VIDEO : link('complete')).waitFor();
         result.capabilities = await page.evaluate(() => {
           const video = document.createElement('video');
           return { userAgent: navigator.userAgent, platform: navigator.platform, maxTouchPoints: navigator.maxTouchPoints,
@@ -504,6 +513,63 @@ async function main() {
         assert.ok(result.httpRequests.slice(count).some(({ manifest, failedManifest }) => manifest && !failedManifest), 'Retry really refetches the repaired manifest');
         await button(page, 'Play').click(); await playing(page); await pause(page);
         result.repairedMedia = await media(page); await capture(page, 'native-manifest-repaired');
+      });
+      await scenario('native-plain-video-reference', async ({ page, result }) => {
+        result.acceptance = 'Reference observation only, not an application acceptance pass. Commands call the unmodified HTMLMediaElement directly.';
+        assert.equal(await page.locator('script').count(), 0, 'The reference page contains no application scripts');
+        assert.equal(await page.evaluate(() => performance.getEntriesByType('resource').some(({ name }) => /\/assets\/.*\.js/.test(name))), false,
+          'No application bundle was loaded in the reference document');
+        await page.locator(VIDEO).evaluate((video) => video.play()); await playing(page);
+        await eventually(() => result.httpRequests.some(({ missing, status }) => missing === 'middle' && status === 404),
+          'The reference engine receives the same real missing-middle 404');
+        await page.locator(VIDEO).evaluate((video) => video.pause());
+        result.referenceInitial = await media(page); result.referenceObservations = [];
+        for (const target of [75, 125]) {
+          const observation = { requestedTime: target, pausedSamples: [], playingSamples: [] };
+          result.referenceObservations.push(observation);
+          observation.seekCommand = await page.locator(VIDEO).evaluate((video, target) => {
+            video.pause();
+            try {
+              video.currentTime = target;
+              return { requestedTime: target, immediateTime: video.currentTime, seeking: video.seeking };
+            } catch (error) { return { requestedTime: target, error: { name: error.name, message: error.message } }; }
+          }, target);
+          for (let sample = 0; sample < 6; sample += 1) {
+            observation.pausedSamples.push(await media(page));
+            if (sample < 5) await delay(200);
+          }
+          await capture(page, `reference-paused-${target}`);
+          observation.playCommand = await page.locator(VIDEO).evaluate(async (video) => {
+            let timeout;
+            try {
+              return await Promise.race([
+                video.play().then(() => ({ resolved: true }), (error) => ({ error: { name: error.name, message: error.message } })),
+                new Promise((accept) => { timeout = setTimeout(() => accept({ pendingAfterMs: 2000 }), 2000); }),
+              ]);
+            } catch (error) { return { error: { name: error.name, message: error.message } }; }
+            finally { clearTimeout(timeout); }
+          });
+          for (let sample = 0; sample < 10; sample += 1) {
+            await delay(200); observation.playingSamples.push(await media(page));
+          }
+          await capture(page, `reference-playing-${target}`);
+          await page.locator(VIDEO).evaluate((video) => video.pause());
+          console.log(`NATIVE_REFERENCE_OBSERVATION ${JSON.stringify(observation)}`);
+        }
+      }, { diagnostic: true, reference: true });
+      await scenario('app-native-repaired-middle-frame', async ({ page, result, session, openRoute }) => {
+        session.healed.add('middle'); await openRoute('middle'); await playing(page); await pause(page);
+        assert.ok(result.httpRequests.some(({ missing, repaired, status }) => missing === 'middle' && repaired && status === 200),
+          'The app actually loads the repaired middle-fragment bytes');
+        result.repairedSeeks = [];
+        for (const requestedTime of [75, 125]) {
+          const previousFrameAt = (await media(page)).presentedFrame?.at ?? -1;
+          const target = await seek(page, requestedTime);
+          await pausedFrameAt(page, target, previousFrameAt);
+          result.repairedSeeks.push({ requestedTime, target, media: await media(page) });
+          await capture(page, `app-native-repaired-frame-${requestedTime}`);
+          await button(page, 'Play').click(); await playing(page); await pause(page);
+        }
       });
     }
   } finally {

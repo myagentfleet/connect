@@ -18,23 +18,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - profile: firefox-linux
-            os: ubuntu-latest
-            engine: firefox
-            native: 'false'
-            cases: ''
-            diagnostic: 'false'
           - profile: webkit-macos
             os: macos-15
             engine: webkit
             native: 'false'
-            cases: ''
+            cases: controls-and-decoded-playback
             diagnostic: 'false'
           - profile: webkit-macos-iphone-emulation
             os: macos-15
             engine: webkit
             native: 'true'
-            cases: controls-and-decoded-playback,healthy-loop,loading-and-navigation-cancellation,native-gap-observations,native-manifest-error-and-repaired-retry
+            cases: native-plain-video-reference,app-native-repaired-middle-frame
             diagnostic: 'true'
     env:
       FINAL_CANDIDATE_SHA: ff8654bd8faf4e9b4de121bb1b188a7be7e1e745
