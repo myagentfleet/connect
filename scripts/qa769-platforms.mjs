@@ -1,0 +1,386 @@
+/* Validation only. Publish on a separate QA branch, never in the application PR. */
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { promisify } from 'node:util';
+import { firefox, webkit, devices } from 'playwright';
+import { build, preview } from 'vite';
+
+const execute = promisify(execFile);
+const output = resolve(process.env.QA769_OUTPUT || 'qa769-platform-results');
+const fixtures = resolve(process.env.QA769_FIXTURES || 'public/demo-video');
+const engine = process.env.QA769_ENGINE || 'firefox';
+const nativeProfile = process.env.QA769_NATIVE_PROFILE === 'true';
+const caseFilter = process.env.QA769_CASE || null;
+const VIDEO = '.DriveView video';
+const TIMELINE = '[role="slider"][aria-label="Drive timeline"]';
+const OVERLAY = 'button[aria-label="Play video"],button[aria-label="Pause video"]';
+const PUBLIC_ROUTE = '5beb9b58bd12b691|0000010a--a51155e496';
+const PUBLIC_PREFIX = `/demo-video/${PUBLIC_ROUTE.replace('|', '/')}`;
+const ids = { complete: 11, first: 12, middle: 13 };
+const link = (kind) => `.DriveEntry[href="/deadbeefdeadbeef/00000000--${String(ids[kind]).padStart(10, '0')}"]`;
+const report = {
+  started: new Date().toISOString(), engine, nativeProfile, caseFilter, hostOS: process.platform,
+  scope: 'Production build, Playwright-patched browser engine, real media decoding and native media clock. All transport commands use application controls.',
+  profile: nativeProfile ? 'macOS WebKit with Playwright iPhone 13 emulation; requires native HLS. This is not physical iOS or branded Safari.' : 'Unmodified desktop browser capabilities; application selects its normal transport.',
+  fixtures: 'Checked-in H.264/AAC MPEG-TS bytes. A local HTTP server supplies manifests, real 404 responses, repaired bytes and held requests, including byte ranges; only API metadata and map style are browser-intercepted.',
+  omissions: ['Stock Firefox and branded Safari (Playwright uses patched engines)', 'Physical iOS/Android and installed PWAs',
+    'Physical audio output, AAC audio-decoder proof, Bluetooth, background/foreground and OS media controls', 'Production map tiles and real driving footage'],
+  cases: [], screenshots: [],
+};
+const delay = (ms) => new Promise((accept) => setTimeout(accept, ms));
+const save = () => writeFile(resolve(output, 'report.json'), JSON.stringify(report, null, 2));
+async function eventually(predicate, message, timeout = 15000) {
+  const until = Date.now() + timeout;
+  while (!predicate() && Date.now() < until) await delay(100);
+  assert.ok(predicate(), message);
+}
+const media = (page) => page.locator(VIDEO).evaluate((video) => ({
+  id: video.dataset.qaVideo, time: video.currentTime, duration: video.duration,
+  paused: video.paused, seeking: video.seeking, ready: video.readyState, rate: video.playbackRate, muted: video.muted,
+  width: video.videoWidth, height: video.videoHeight, frames: video.getVideoPlaybackQuality?.().totalVideoFrames ?? null,
+  presentedFrames: globalThis.qaFrames.get(video) ?? null,
+  currentSrc: video.currentSrc, transport: video.currentSrc.startsWith('blob:') ? 'MSE' : 'native URL',
+  hlsModuleLoaded: performance.getEntriesByType('resource').some(({ name }) => /\/hls-[^/]+\.js/.test(name)),
+  buffered: Array.from({ length: video.buffered.length }, (_, i) => [video.buffered.start(i), video.buffered.end(i)]),
+  error: video.error && { code: video.error.code, message: video.error.message },
+}));
+const button = (page, name) => page.getByRole('button', { name, exact: true });
+async function playing(page) {
+  await page.waitForFunction((selector) => {
+    const video = document.querySelector(selector);
+    return video && !video.paused && !video.seeking && video.readyState >= 2 && video.videoWidth > 0;
+  }, VIDEO);
+  const before = await media(page);
+  assert.ok(before.frames !== null || before.presentedFrames !== null, 'A real decoded/presented frame counter must be available');
+  await page.waitForFunction(({ selector, before }) => {
+    const video = document.querySelector(selector);
+    const decoded = video.getVideoPlaybackQuality?.().totalVideoFrames;
+    const presented = globalThis.qaFrames.get(video);
+    return video.currentTime > before.time + 0.15
+      && ((decoded !== undefined && decoded > (before.frames ?? 0)) || (presented !== undefined && presented > (before.presentedFrames ?? 0)));
+  }, { selector: VIDEO, before });
+  if (nativeProfile) {
+    const current = await media(page);
+    assert.match(current.currentSrc, /^http:\/\/127\.0\.0\.1:.*\.m3u8$/, 'The emulated iPhone profile must actually use a native HLS URL');
+    assert.equal(current.hlsModuleLoaded, false, 'The native profile must not load hls.js');
+  }
+}
+async function pause(page) {
+  if (await button(page, 'Pause').count()) await button(page, 'Pause').click();
+  await page.waitForFunction((selector) => document.querySelector(selector)?.paused, VIDEO);
+  await button(page, 'Play').waitFor();
+}
+async function speed(page, rate) {
+  await button(page, 'Playback speed').click();
+  await page.getByRole('menuitemradio', { name: `${rate}×`, exact: true }).click();
+  await page.getByRole('menuitemradio').first().waitFor({ state: 'hidden' });
+  await page.waitForFunction(({ selector, rate }) => document.querySelector(selector).playbackRate === rate, { selector: VIDEO, rate });
+}
+async function seek(page, seconds) {
+  const slider = page.locator(TIMELINE);
+  await slider.scrollIntoViewIfNeeded();
+  const { box, min, max } = await slider.evaluate((element) => ({ box: element.getBoundingClientRect().toJSON(),
+    min: Number(element.getAttribute('aria-valuemin')), max: Number(element.getAttribute('aria-valuemax')) }));
+  const x = box.x + Math.max(0.5, Math.min(box.width - 0.5, box.width * (seconds - min) / (max - min)));
+  await page.mouse.click(x, box.y + box.height / 2);
+  return min + (x - box.x) / box.width * (max - min);
+}
+async function settledAt(page, target) {
+  await page.waitForFunction(({ videoSelector, sliderSelector, target }) => {
+    const video = document.querySelector(videoSelector);
+    return video?.paused && !video.seeking && video.readyState >= 2 && Math.abs(video.currentTime - target) < 0.8
+      && Math.abs(Number(document.querySelector(sliderSelector).getAttribute('aria-valuenow')) - video.currentTime) < 0.25
+      && !document.querySelector('[aria-label="Loading video"]')
+      && ![...document.querySelectorAll('button')].some((element) => element.textContent.trim() === 'Retry');
+  }, { videoSelector: VIDEO, sliderSelector: TIMELINE, target });
+}
+async function errorVisible(page) {
+  // hls.js retries fragments for approximately 31 seconds; native engines have their own network policy.
+  await page.waitForFunction(() => [...document.querySelectorAll('[role="status"]')].some((element) =>
+    /not uploaded|Unable to load video/.test(element.textContent)
+      && [...element.querySelectorAll('button')].some((button) => button.textContent.trim() === 'Retry')), null, { timeout: 60000 });
+  assert.equal((await media(page)).paused, true, 'A terminal error pauses actual media');
+}
+async function capture(page, name) {
+  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(() => { window.scrollTo(0, 0); return new Promise((accept) => requestAnimationFrame(() => requestAnimationFrame(accept))); });
+  const filename = `${name}-${page.viewportSize().width}.png`;
+  await page.screenshot({ path: resolve(output, filename), fullPage: true });
+  report.screenshots.push(filename);
+}
+
+async function main() {
+  assert.ok(['firefox', 'webkit'].includes(engine), 'Choose a supported browser engine');
+  assert.ok(!nativeProfile || (engine === 'webkit' && process.platform === 'darwin'), 'The native profile requires macOS WebKit');
+  await mkdir(output, { recursive: true });
+  report.sha = (await execute('git', ['rev-parse', 'HEAD'])).stdout.trim();
+  report.expectedSha = process.env.QA_CANDIDATE_SHA;
+  if (report.expectedSha) {
+    assert.equal(report.sha, report.expectedSha, 'The exact candidate revision is checked out');
+    await execute('git', ['diff', '--exit-code', report.expectedSha, '--', '.', ':!scripts/qa769-platforms.mjs', ':!.github/workflows/qa769-platforms.yaml']);
+  }
+  const assets = new Map();
+  for (const segment of [0, 1, 2]) for (const name of ['qcamera.ts', 'coords.json', 'events.json', 'sprite.jpg']) {
+    assets.set(`${segment}/${name}`, await readFile(resolve(fixtures, `${segment}/${name}`)));
+  }
+  for (const name of ['complete', 'missing-first', 'missing-middle']) assets.set(`${name}.m3u8`, await readFile(resolve(fixtures, `${name}.m3u8`)));
+  report.fixtureSha256 = Object.fromEntries([...assets].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')]));
+  const sessions = new Map();
+  let active;
+  const contentType = (path) => path.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : path.endsWith('.ts') ? 'video/mp2t'
+    : path.endsWith('.jpg') ? 'image/jpeg' : 'application/json';
+  const respond = (req, res, bytes, status = 200, type = 'video/mp2t') => {
+    if (res.destroyed || res.writableEnded) return;
+    bytes = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+    const headers = { 'Content-Type': type, 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes' };
+    const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '');
+    if (status === 200 && range) {
+      const start = Number(range[1]), end = Math.min(range[2] ? Number(range[2]) : bytes.length - 1, bytes.length - 1);
+      if (start > end) { res.writeHead(416, { ...headers, 'Content-Range': `bytes */${bytes.length}` }); res.end(); return; }
+      headers['Content-Range'] = `bytes ${start}-${end}/${bytes.length}`;
+      bytes = bytes.subarray(start, end + 1); status = 206;
+    }
+    res.writeHead(status, { ...headers, 'Content-Length': bytes.length }); res.end(req.method === 'HEAD' ? undefined : bytes);
+  };
+  const fixturePlugin = { name: 'qa-real-http-fixtures', configurePreviewServer(server) {
+    server.middlewares.use((req, res, next) => {
+      const path = new URL(req.url, 'http://localhost').pathname;
+      if (path.startsWith('/__qa/')) {
+        const [, , sessionId, ...parts] = path.split('/');
+        const session = sessions.get(sessionId), file = parts.join('/');
+        if (!session || !assets.has(file.replace(/^missing-(first|middle)\.ts$/, (_, kind) => `${kind === 'first' ? 0 : 1}/qcamera.ts`))) {
+          respond(req, res, 'Unknown QA media', 404, 'text/plain'); return;
+        }
+        const missing = /^missing-(first|middle)\.ts$/.exec(file)?.[1];
+        const entry = { path, at: Date.now(), range: req.headers.range || null, missing: missing || null,
+          repaired: Boolean(missing && session.healed.has(missing)), held: Boolean(missing && session.hold) };
+        session.result.httpRequests.push(entry);
+        res.once('close', () => { entry.finished = res.writableEnded; entry.status = res.statusCode; });
+        if (missing && session.hold) { session.held.push({ req, res }); return; }
+        const repaired = missing && session.healed.has(missing);
+        const asset = missing ? `${missing === 'first' ? 0 : 1}/qcamera.ts` : file;
+        respond(req, res, missing && !repaired ? 'BlobNotFound' : assets.get(asset), missing && !repaired ? 404 : 200,
+          missing && !repaired ? 'text/plain' : contentType(asset));
+        return;
+      }
+      if (!path.startsWith('/demo-video/')) { next(); return; }
+      const file = path.startsWith(`${PUBLIC_PREFIX}/`) ? path.slice(PUBLIC_PREFIX.length + 1) : path.slice('/demo-video/'.length);
+      if (!assets.has(file)) { respond(req, res, 'Unknown fixture', 404, 'text/plain'); return; }
+      let bytes = assets.get(file);
+      if (file.endsWith('.m3u8')) {
+        assert.ok(active, 'A scenario owns each manifest request');
+        const kind = file.startsWith('missing-first') ? 'first' : 'middle';
+        bytes = bytes.toString().replace(/^https:.*$/gm, `/__qa/${active.id}/missing-${kind}.ts`)
+          .replace(/^(\d+\/qcamera\.ts)$/gm, `/__qa/${active.id}/$1`);
+        active.result.httpRequests.push({ path, at: Date.now(), manifest: true, body: bytes });
+      }
+      respond(req, res, bytes, 200, contentType(file));
+    });
+  } };
+  await build({ mode: 'production', build: { outDir: resolve(output, 'app'), sourcemap: false } });
+  const server = await preview({ configFile: false, plugins: [fixturePlugin], build: { outDir: resolve(output, 'app') },
+    preview: { host: '127.0.0.1', port: 0, strictPort: true } });
+  const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
+  let browser;
+  try {
+    // Standard Playwright launch; no browser security flags or media capability overrides.
+    browser = await ({ firefox, webkit }[engine]).launch({ headless: false });
+    report.browserVersion = browser.version();
+    async function scenario(name, run) {
+      if (caseFilter && name !== caseFilter) return;
+      const context = await browser.newContext({ ...(nativeProfile ? devices['iPhone 13'] : { viewport: { width: 1280, height: 800 } }),
+        timezoneId: 'America/Los_Angeles', serviceWorkers: 'block' });
+      const page = await context.newPage();
+      page.setDefaultTimeout(20000);
+      const result = { name, status: 'running', pageErrors: [], console: [], requestFailures: [], httpRequests: [] };
+      const session = { id: String(report.cases.length + 1), result, healed: new Set(), held: [], hold: false };
+      sessions.set(session.id, session); active = session; report.cases.push(result);
+      page.on('pageerror', (error) => result.pageErrors.push(error.message));
+      page.on('console', (message) => { if (['warning', 'error'].includes(message.type())) result.console.push(message.text()); });
+      page.on('requestfailed', (request) => result.requestFailures.push({ url: request.url(), failure: request.failure() }));
+      try {
+        await page.addInitScript(() => {
+          performance.setResourceTimingBufferSize(3000);
+          globalThis.qaEvents = []; globalThis.qaFrames = new WeakMap(); let nextId = 0;
+          for (const type of ['loadedmetadata', 'playing', 'pause', 'seeking', 'seeked', 'waiting', 'ended', 'error', 'emptied', 'ratechange', 'timeupdate']) {
+            document.addEventListener(type, ({ target }) => {
+              if (!(target instanceof HTMLVideoElement)) return;
+              if (!target.dataset.qaVideo) {
+                target.dataset.qaVideo = String(++nextId);
+                if (target.requestVideoFrameCallback) {
+                  globalThis.qaFrames.set(target, 0);
+                  const frame = () => { globalThis.qaFrames.set(target, globalThis.qaFrames.get(target) + 1);
+                    if (target.isConnected) target.requestVideoFrameCallback(frame); };
+                  target.requestVideoFrameCallback(frame);
+                }
+              }
+              globalThis.qaEvents.push({ type, id: target.dataset.qaVideo, at: performance.now(), time: target.currentTime,
+                paused: target.paused, ready: target.readyState, rate: target.playbackRate });
+              if (globalThis.qaEvents.length > 3000) globalThis.qaEvents.shift();
+            }, true);
+          }
+        });
+        const start = Date.parse('2026-10-09T12:00:00Z');
+        const publicRoute = { fullname: PUBLIC_ROUTE, dongle_id: PUBLIC_ROUTE.split('|')[0], url: `${origin}/demo-video`,
+          create_time: start / 1000, start_time: new Date(start).toISOString().slice(0, 19), end_time: new Date(start + 180000).toISOString().slice(0, 19),
+          start_time_utc_millis: start, end_time_utc_millis: start + 180000, segment_numbers: [0, 1, 2],
+          segment_start_times: [0, 1, 2].map((i) => start + i * 60000), segment_end_times: [1, 2, 3].map((i) => start + i * 60000),
+          maxqlog: 2, procqlog: 2, distance: 0.105, is_public: true, start_lat: 32.75, start_lng: -117.195,
+          end_lat: 32.75, end_lng: -117.1932, videoStartOffset: 0,
+          startLocation: { place: 'Synthetic start', details: 'QA fixture' }, endLocation: { place: 'Synthetic end', details: 'QA fixture' } };
+        await context.route('**/*', async (route) => {
+          const url = new URL(route.request().url());
+          const fulfill = (body, status = 200) => route.fulfill({ status, contentType: 'application/json',
+            headers: { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store', 'Access-Control-Allow-Headers': 'Content-Type' },
+            body: typeof body === 'string' ? body : JSON.stringify(body) });
+          if (url.origin === origin || ['data:', 'blob:'].includes(url.protocol)) return route.continue();
+          if (route.request().method() === 'OPTIONS') return fulfill('', 204);
+          if (url.hostname === 'api.comma.ai' && url.pathname === '/v1/devices/5beb9b58bd12b691/routes_segments') return fulfill([publicRoute]);
+          if (url.hostname === 'api.comma.ai' && decodeURIComponent(url.pathname) === `/v1/route/${PUBLIC_ROUTE}/files`) {
+            return fulfill({ qcameras: [0, 1, 2].map((segment) => `${origin}${PUBLIC_PREFIX}/${segment}/qcamera.ts`) });
+          }
+          if (url.hostname === 'api.mapbox.com' && url.pathname.startsWith('/styles/v1/')) return fulfill({ version: 8, sources: {},
+            layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#202c33' } }] });
+          if (url.hostname === 'api.mapbox.com' && url.pathname.startsWith('/geocoding/')) return fulfill({ features: [] });
+          if (url.hostname.endsWith('mapbox.com')) return fulfill('', 204);
+          result.console.push(`Blocked external request: ${url.origin}${url.pathname}`); return route.abort('blockedbyclient');
+        });
+        await page.goto(`${origin}/demo`, { waitUntil: 'domcontentloaded' });
+        await page.locator(link('complete')).waitFor();
+        result.capabilities = await page.evaluate(() => {
+          const video = document.createElement('video');
+          return { userAgent: navigator.userAgent, platform: navigator.platform, maxTouchPoints: navigator.maxTouchPoints,
+            canPlayHls: video.canPlayType('application/vnd.apple.mpegurl'), h264Aac: video.canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'),
+            mediaSource: typeof MediaSource, mseH264Aac: globalThis.MediaSource?.isTypeSupported('video/mp4; codecs="avc1.42E01E, mp4a.40.2"') ?? false,
+            videoFrameCallback: typeof video.requestVideoFrameCallback, videoPlaybackQuality: typeof video.getVideoPlaybackQuality,
+            hover: matchMedia('(hover: hover)').matches, finePointer: matchMedia('(pointer: fine)').matches };
+        });
+        console.log(`CAPABILITIES ${name} ${JSON.stringify(result.capabilities)}`);
+        if (nativeProfile) assert.ok(result.capabilities.canPlayHls, 'Native HLS must be supported in the labeled native profile');
+        const openRoute = async (kind) => {
+          if (await page.locator('.DriveView').count()) await page.locator('.DriveView [aria-label="Close"]').click();
+          await page.locator(link(kind)).click(); await page.locator(VIDEO).waitFor();
+        };
+        await run({ page, result, session, openRoute });
+        assert.deepEqual(result.pageErrors, [], 'No uncaught application errors');
+        result.status = 'passed';
+      } catch (error) {
+        result.status = 'failed'; result.error = error.stack;
+        await capture(page, `${name}-failure`).catch((error) => { result.screenshotError = error.message; });
+      } finally {
+        result.mediaEvents = await page.evaluate(() => globalThis.qaEvents).catch(() => []);
+        result.finalMedia = await media(page).catch(() => null);
+        result.finalText = await page.locator('body').innerText().catch(() => '');
+        for (const { req, res } of session.held) respond(req, res, 'BlobNotFound', 404, 'text/plain');
+        await context.close();
+        console.log(`${result.status.toUpperCase()}: ${name}${result.error ? `\n${result.error}` : ''}`);
+        await save();
+      }
+    }
+    await scenario('controls-and-decoded-playback', async ({ page, result, openRoute }) => {
+      await openRoute('complete'); await playing(page); await pause(page);
+      const stopped = await media(page); await delay(400);
+      assert.ok(Math.abs((await media(page)).time - stopped.time) < 0.05, 'Pause stops the actual clock');
+      await settledAt(page, await seek(page, 45));
+      await page.locator(TIMELINE).focus(); await page.keyboard.press('ArrowRight'); await settledAt(page, 55);
+      await button(page, 'Jump back 10 seconds').click(); await settledAt(page, 45);
+      const rate = nativeProfile ? 2 : 4;
+      await speed(page, rate); assert.equal((await media(page)).paused, true, 'Changing speed preserves paused state');
+      await button(page, 'Unmute').click(); assert.equal((await media(page)).muted, false, 'Unmute changes actual media state');
+      await button(page, 'Play video').click(); await playing(page);
+      assert.equal((await media(page)).rate, rate, 'Playback retains selected speed');
+      await button(page, 'Mute').click(); assert.equal((await media(page)).muted, true, 'Mute changes actual media state');
+      const before = await media(page);
+      await button(page, 'Map').click(); await playing(page);
+      assert.equal((await media(page)).id, before.id, 'Playing Map view preserves the actual media element');
+      assert.equal(await page.locator(OVERLAY).count(), 0, 'Map view removes the video overlay');
+      await page.locator('.mapboxgl-canvas').waitFor({ state: 'visible' });
+      await capture(page, 'playing-map');
+      await button(page, 'Video').click(); await playing(page);
+      assert.equal((await media(page)).id, before.id, 'Returning to Video preserves actual media');
+      await button(page, 'Pause video').click(); await pause(page);
+      result.decodedMedia = await media(page);
+      for (const width of nativeProfile ? [390] : [1280, 390]) {
+        await page.setViewportSize({ width, height: width < 600 ? 844 : 800 });
+        await capture(page, 'paused-player');
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'The player fits the viewport');
+      }
+    });
+    await scenario('healthy-loop', async ({ page, result, openRoute }) => {
+      await openRoute('complete'); await playing(page); await pause(page);
+      const slider = page.locator(TIMELINE); await slider.scrollIntoViewIfNeeded();
+      const box = await slider.boundingBox();
+      await page.mouse.move(box.x + box.width / 180, box.y + box.height / 2); await page.mouse.down();
+      await page.mouse.move(box.x + box.width * 15 / 180, box.y + box.height / 2, { steps: 8 }); await page.mouse.up();
+      await page.waitForFunction((selector) => Number(document.querySelector(selector).getAttribute('aria-valuemax')) < 16, TIMELINE);
+      const bounds = await slider.evaluate((element) => ({ start: Number(element.getAttribute('aria-valuemin')), end: Number(element.getAttribute('aria-valuemax')) }));
+      assert.ok(bounds.start > 0 && bounds.start < 2 && bounds.end > 14, 'Pointer drag creates the intended loop');
+      await speed(page, nativeProfile ? 2 : 8);
+      const eventStart = await page.evaluate(() => globalThis.qaEvents.length);
+      await button(page, 'Play').click(); await playing(page); await delay(nativeProfile ? 8500 : 3000); await pause(page);
+      const times = await page.evaluate((start) => globalThis.qaEvents.slice(start).filter(({ type }) => type === 'timeupdate').map(({ time }) => time), eventStart);
+      assert.ok(times.some((time, index) => index && times[index - 1] - time > 5), 'The actual media clock wraps the loop');
+      assert.ok(times.every((time) => time >= bounds.start - 0.8 && time <= bounds.end + 0.8), 'Actual loop samples stay in the selected interval');
+      assert.equal(await button(page, 'Retry').count(), 0, 'Healthy loop does not show an error');
+      result.loop = { bounds, times }; await capture(page, 'healthy-loop');
+    });
+    await scenario('missing-first-and-repair', async ({ page, result, session, openRoute }) => {
+      await openRoute('first'); await errorVisible(page);
+      assert.ok(result.httpRequests.some(({ missing, status }) => missing === 'first' && status === 404), 'The server actually delivered a missing-first HTTP 404');
+      assert.equal(await page.locator(OVERLAY).count(), 0, 'The fatal error replaces the overlay');
+      await capture(page, 'missing-first'); await pause(page);
+      await settledAt(page, await seek(page, 125));
+      await page.locator(TIMELINE).focus(); await page.keyboard.press('Home'); await errorVisible(page);
+      const requests = result.httpRequests.length; session.healed.add('first');
+      await button(page, 'Retry').click(); await settledAt(page, 0);
+      assert.ok(result.httpRequests.slice(requests).some(({ missing, repaired }) => missing === 'first' && repaired), 'Retry fetches actual repaired bytes');
+      await button(page, 'Play').click(); await playing(page); await capture(page, 'first-repaired');
+    });
+    await scenario('missing-middle-retry-and-later-recovery', async ({ page, result, openRoute }) => {
+      await openRoute('middle'); await playing(page); await pause(page);
+      await seek(page, 75); await errorVisible(page); await capture(page, 'missing-middle');
+      const count = result.httpRequests.filter(({ missing }) => missing === 'middle').length;
+      await button(page, 'Retry').click();
+      await eventually(() => result.httpRequests.filter(({ missing }) => missing === 'middle').length > count, 'Retry issues a real request for the missing middle fragment');
+      await errorVisible(page); await settledAt(page, await seek(page, 125));
+      await button(page, 'Play').click(); await playing(page); await capture(page, 'middle-recovered');
+    });
+    await scenario('loading-and-navigation-cancellation', async ({ page, result, session, openRoute }) => {
+      session.hold = true; await openRoute('first');
+      await eventually(() => session.held.length, 'The server holds an actual first-fragment request');
+      await page.getByLabel('Loading video', { exact: true }).waitFor();
+      const overlay = await button(page, 'Pause video').elementHandle();
+      const before = await media(page);
+      await overlay.focus(); await page.keyboard.press('Enter'); await button(page, 'Play video').waitFor();
+      assert.equal((await media(page)).paused, true, 'Keyboard pause works while waiting');
+      await page.keyboard.press('Space'); await button(page, 'Pause video').waitFor();
+      assert.ok(await overlay.evaluate((element) => element.isConnected && document.activeElement === element), 'Loading transport retains keyboard focus');
+      const after = await media(page);
+      assert.equal(after.frames ?? after.presentedFrames, 0, 'A command before the first fragment is not decoded playback');
+      assert.ok(Math.abs(after.time - before.time) < 0.05, 'Waiting commands do not advance the clock');
+      result.loadingMedia = { before, after }; await capture(page, 'loading');
+      const old = await page.locator(VIDEO).elementHandle();
+      session.hold = false; await openRoute('complete'); await playing(page);
+      assert.equal(await old.evaluate((element) => element.isConnected), false, 'Navigation disconnects the old video');
+      const good = await media(page);
+      for (const { req, res } of session.held.splice(0)) respond(req, res, 'BlobNotFound', 404, 'text/plain');
+      await playing(page);
+      assert.equal((await media(page)).id, good.id, 'Old HTTP work does not replace the new media');
+      assert.equal(await button(page, 'Retry').count(), 0, 'Old failure does not appear on the new route');
+      await capture(page, 'navigation-recovered');
+    });
+  } finally {
+    if (browser) await browser.close();
+    await server.close();
+  }
+  assert.ok(report.cases.length, 'At least one requested scenario ran');
+  report.finished = new Date().toISOString(); report.passed = report.cases.every(({ status }) => status === 'passed');
+  await save(); assert.ok(report.passed, 'One or more platform scenarios failed; inspect report and screenshots');
+}
+main().catch(async (error) => {
+  report.fatalError = error.stack; report.passed = false;
+  await mkdir(output, { recursive: true }); await save(); console.error(error); process.exitCode = 1;
+});
