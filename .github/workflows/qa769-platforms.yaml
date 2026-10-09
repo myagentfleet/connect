@@ -1,35 +1,23 @@
-# Diagnostic comparisons; these results do not replace application acceptance tests.
-name: qa769-media-isolation
+# Isolated media diagnostics; collection success is not application acceptance.
+name: qa769-stock-safari-reference
 
 on:
   push:
     branches: [qa/769-platforms]
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 permissions:
   contents: read
 
 jobs:
-  isolation:
+  safari:
     if: github.ref == 'refs/heads/qa/769-platforms'
     runs-on: macos-15
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: [audio-reference, native-app]
     env:
       QA_CANDIDATE_SHA: 8276cd68b3ac31da150fc8b4566fb29e479e2f65
-      QA769_OUTPUT: ${{ github.workspace }}/results/${{ matrix.profile }}
-      QA769_AUDIO_VARIANT_DIR: ${{ github.workspace }}/results/${{ matrix.profile }}/video-only
-      QA769_ENGINE: webkit
-      QA769_NATIVE_PROFILE: 'true'
-      QA769_FRAME_OBSERVER: 'false'
-      QA769_DIAGNOSTIC_ONLY: 'true'
-      QA769_CASE: native-ui-pixels-healthy-75,native-ui-pixels-healthy-125,native-ui-pixels-missing-middle-later-125,native-ui-pixels-repaired-middle-75,native-manifest-error-and-repaired-retry
-      VITE_POSTHOG_KEY: ''
-      VITE_POSTHOG_HOST: ''
-      E2E: 'true'
+      QA769_OUTPUT: ${{ github.workspace }}/results/safari-reference
+      QA769_AUDIO_VARIANT_DIR: ${{ github.workspace }}/results/safari-reference/video-only
     defaults:
       run:
         shell: bash
@@ -52,40 +40,28 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
-      - name: Record source identity and copy diagnostic scripts
+      - name: Record source identity and copy diagnostic runner
         run: |
           test "$(git rev-parse HEAD)" = "$QA_CANDIDATE_SHA"
           mkdir -p "$QA769_OUTPUT"
           git rev-parse HEAD > "$QA769_OUTPUT/source-sha.txt"
-          echo "VITE_APP_GIT_SHA=$QA_CANDIDATE_SHA" >> "$GITHUB_ENV"
-          cp ../harness/scripts/qa769-reference.mjs scripts/qa769-reference.mjs
-          cp ../harness/scripts/qa769-platforms.mjs scripts/qa769-platforms.mjs
+          cp ../harness/scripts/qa769-safari-reference.mjs scripts/qa769-safari-reference.mjs
       - name: Install frozen application dependencies
         run: bun install --frozen-lockfile 2>&1 | tee "$QA769_OUTPUT/install.log"
-      - name: Install pinned Playwright and normal WebKit
-        run: |
-          bun add --no-save playwright@1.64.0 2>&1 | tee "$QA769_OUTPUT/browser-tools.log"
-          npx --no-install playwright install --with-deps webkit 2>&1 | tee "$QA769_OUTPUT/browser-install.log"
       - name: Install FFmpeg for independently verified media transformation
-        if: matrix.profile == 'audio-reference'
         run: |
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
             brew install ffmpeg
           fi
       - name: Generate and verify packet-preserving video-only media
-        if: matrix.profile == 'audio-reference'
         run: python3 ../harness/scripts/qa769-video-only.py --source public/demo-video --output "$QA769_AUDIO_VARIANT_DIR" 2>&1 | tee "$QA769_OUTPUT/fixture-verification.log"
-      - name: Compare original audio and video-only MSE startup
-        if: matrix.profile == 'audio-reference'
-        run: node scripts/qa769-reference.mjs 2>&1 | tee "$QA769_OUTPUT/reference.log"
-      - name: Observe native application seeks and error recovery without RVFC
-        if: matrix.profile == 'native-app'
-        run: node scripts/qa769-platforms.mjs 2>&1 | tee "$QA769_OUTPUT/native-app.log"
+      - name: Collect stock Safari with the pre-enabled system driver
+        run: node scripts/qa769-safari-reference.mjs 2>&1 | tee "$QA769_OUTPUT/safari-reference.log"
       - name: Upload every diagnostic outcome
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa769-isolation-${{ matrix.profile }}-${{ github.run_id }}
-          path: results/${{ matrix.profile }}
+          name: qa769-stock-safari-${{ github.run_id }}
+          path: results/safari-reference
           if-no-files-found: warn
           retention-days: 7
