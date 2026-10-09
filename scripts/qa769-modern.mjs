@@ -21,6 +21,7 @@ const SPEED = 'button[aria-label="Playback speed"]';
 const ELAPSED = '[aria-label="Selection playback time"]';
 const VIDEO_TOGGLE = 'button[aria-label="Play video"], button[aria-label="Pause video"]';
 const PUBLIC_ROUTE = '5beb9b58bd12b691|0000010a--a51155e496';
+const PUBLIC_ASSET_PREFIX = `/demo-video/${PUBLIC_ROUTE.replace('|', '/')}`;
 const routes = { complete: 11, first: 12, middle: 13 };
 const viewports = [320, 390, 1280, 1600].map((width) => ({ width, height: width < 600 ? 844 : 800, deviceScaleFactor: 1 }));
 const report = {
@@ -149,8 +150,10 @@ async function adjacentMenus(page) {
 
 async function timelineHover(page) {
   const before = await media(page);
+  await page.evaluate(() => document.fonts.ready);
   const slider = await page.waitForSelector(TIMELINE, { visible: true });
   await slider.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const box = await slider.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.waitForFunction((selector) => /^\d+:\d{2}(?::\d{2})? · \d{2}:\d{2}:\d{2}$/.test(
@@ -161,7 +164,22 @@ async function timelineHover(page) {
   assert.ok(hover.width > 0 && hover.height > 0 && hover.x >= -1 && hover.right <= page.viewport().width + 1,
     'The timeline hover time is visible and fits the viewport');
   assert.ok(Math.abs((await media(page)).time - before.time) < 0.05, 'Timeline hover does not seek paused media');
-  await capture(page, 'timeline-hover', true);
+  await capture(page, 'timeline-hover', true, async (phase) => {
+    const state = await slider.evaluate((element) => {
+      const badge = element.lastElementChild;
+      const style = getComputedStyle(badge);
+      return { text: badge.textContent.trim(), rect: badge.getBoundingClientRect().toJSON(),
+        hovered: element.matches(':hover'), visibility: style.visibility, display: style.display, opacity: style.opacity,
+        viewport: { width: innerWidth, height: innerHeight, clientWidth: document.documentElement.clientWidth },
+        scroll: { x: scrollX, y: scrollY } };
+    });
+    report.timelineHoverCaptures ||= []; report.timelineHoverCaptures.push({ phase, ...state });
+    assert.match(state.text, /^\d+:\d{2}(?::\d{2})? · \d{2}:\d{2}:\d{2}$/, `The hover badge exists ${phase} capture`);
+    assert.ok(state.hovered && state.visibility === 'visible' && state.display !== 'none' && Number(state.opacity) > 0
+      && state.rect.width > 0 && state.rect.height > 0 && state.rect.left >= 0 && state.rect.right <= state.viewport.width
+      && state.rect.top >= 0 && state.rect.bottom <= state.viewport.height,
+    `The actual pointer and complete visible hover badge survive ${phase} capture`);
+  });
   await page.mouse.move(0, 0);
   await page.waitForFunction((selector) => !/ · \d{2}:\d{2}:\d{2}$/.test(
     document.querySelector(selector)?.lastElementChild?.textContent.trim() || ''), {}, TIMELINE);
@@ -225,13 +243,16 @@ async function narrowErrorCard(page) {
   report.errorCards ||= []; report.errorCards.push(bounds);
 }
 
-async function capture(page, name, keepPointer = false) {
+async function capture(page, name, keepPointer = false, verifyState = null) {
   if (!keepPointer) await page.mouse.move(0, 0);
   await page.evaluate(() => document.fonts.ready);
   await delay(250); // Preserve real CSS, allowing its 150 ms loading/opacity transition to finish.
   const filename = `${name}-${page.viewport().width}.png`;
-  await page.screenshot({ path: resolve(output, filename), fullPage: true });
+  if (verifyState) await verifyState('before');
+  // Keep interaction evidence in the actual viewport instead of CDP's captureBeyondViewport path.
+  await page.screenshot({ path: resolve(output, filename), fullPage: !keepPointer, captureBeyondViewport: !keepPointer });
   report.screenshots.push(filename);
+  if (verifyState) await verifyState('after');
 }
 
 async function scrollToTop(page) {
@@ -441,14 +462,16 @@ async function main() {
       page.on('request', async (request) => {
         try {
           const url = new URL(request.url());
+          const fixturePath = url.pathname.startsWith(`${PUBLIC_ASSET_PREFIX}/`)
+            ? `/demo-video/${url.pathname.slice(PUBLIC_ASSET_PREFIX.length + 1)}` : url.pathname;
           if (request.method() === 'OPTIONS') await respond(request, '', 204, 'text/plain');
           else if (comparison && (url.pathname.endsWith('.m3u8'))) {
             // Same healthy bytes for the existing route8 on all revisions. No app source or media clocks are replaced.
             const absoluteManifest = completeManifest.replace(/^(\d+\/qcamera\.ts)$/gm, `${origin}/demo-video/$1`);
             await respond(request, absoluteManifest, 200, 'application/vnd.apple.mpegurl');
-          } else if (comparison && fixtureAssets.has(url.pathname)) {
-            const type = url.pathname.endsWith('.ts') ? 'video/mp2t' : url.pathname.endsWith('.jpg') ? 'image/jpeg' : 'application/json';
-            await respond(request, fixtureAssets.get(url.pathname), 200, type);
+          } else if ((comparison || fixturePath !== url.pathname) && fixtureAssets.has(fixturePath)) {
+            const type = fixturePath.endsWith('.ts') ? 'video/mp2t' : fixturePath.endsWith('.jpg') ? 'image/jpeg' : 'application/json';
+            await respond(request, fixtureAssets.get(fixturePath), 200, type);
           } else if (comparison && url.hostname === 'cdn.jsdelivr.net' && /^\/npm\/hls\.js@[^/]+\/dist\/hls(?:\.min)?\.js$/.test(url.pathname)) {
             result.requests.push({ url: url.href, realHlsCdn: true });
             await request.continue();
@@ -462,7 +485,7 @@ async function main() {
           } else if (url.origin === origin || ['data:', 'blob:'].includes(url.protocol)) await request.continue();
           else if (url.hostname === 'api.comma.ai' && url.pathname === '/v1/devices/5beb9b58bd12b691/routes_segments') await respond(request, [route]);
           else if (url.hostname === 'api.comma.ai' && decodeURIComponent(url.pathname) === `/v1/route/${PUBLIC_ROUTE}/files`) {
-            await respond(request, { qcameras: [0, 1, 2].map((segment) => `${origin}/demo-video/${segment}/qcamera.ts`) });
+            await respond(request, { qcameras: [0, 1, 2].map((segment) => `${origin}${PUBLIC_ASSET_PREFIX}/${segment}/qcamera.ts`) });
           }
           else if (url.hostname === 'api.mapbox.com' && url.pathname.startsWith('/styles/v1/')) await respond(request, {
             version: 8, sources: {}, layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#202c33' } }],
@@ -580,6 +603,10 @@ async function main() {
           throw error;
         }
         assert.equal((await media(page)).id, active.id, 'Returning to Video restores the overlay on the same playing media');
+        await capture(page, 'video-hover', true, async (phase) => {
+          assert.equal(await overlay.evaluate((element) => getComputedStyle(element.firstElementChild).opacity), '1',
+            `The playing video hover control remains visible ${phase} capture`);
+        });
         await pause(page);
         await page.waitForSelector('.DriveView .thumbnailImage.images');
         for (const viewport of viewports) {
