@@ -90,7 +90,7 @@ const styles = () => ({
     padding: '0 8px',
     backgroundColor: '#151C20',
     color: Colors.lightGrey800,
-    fontSize: 10,
+    fontSize: 12,
     fontVariantNumeric: 'tabular-nums',
     pointerEvents: 'none',
     '@media (max-width: 480px)': { '& .secondary': { display: 'none' } },

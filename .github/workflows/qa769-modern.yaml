@@ -28,7 +28,7 @@ jobs:
             ref: c0772ff6641ce93bc16a6fc884a0959da4a9c17b
             capture_only: 'true'
     env:
-      FINAL_CANDIDATE_SHA: 9e60174590651feaf61477a38a9ab51d590b54f1
+      FINAL_CANDIDATE_SHA: a5d57be8b07c4449b4c03f7644ffb8b370056645
       QA769_REVISION_LABEL: ${{ matrix.revision }}
       QA769_CAPTURE_ONLY: ${{ matrix.capture_only }}
       QA769_OUTPUT: ${{ github.workspace }}/results/${{ matrix.revision }}

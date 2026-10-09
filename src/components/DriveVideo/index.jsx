@@ -122,6 +122,9 @@ class RouteVideo extends Component {
 
   async applyPlayback() {
     const video = this.video.current;
+    if (this.ready && !this.failed && video.playbackRate !== this.props.desiredPlaySpeed) {
+      video.playbackRate = this.props.desiredPlaySpeed;
+    }
     if (!this.props.isPlaying || this.failed) {
       this.playAttempt += 1;
       this.playPending = false;
@@ -129,7 +132,6 @@ class RouteVideo extends Component {
       return;
     }
     if (!this.ready) return;
-    if (video.playbackRate !== this.props.desiredPlaySpeed) video.playbackRate = this.props.desiredPlaySpeed;
     const [start, end] = this.range();
     const offset = video.currentTime * 1000 + (this.props.currentRoute.videoStartOffset || 0);
     if (offset < start || offset >= end) this.seekTo(start);
@@ -275,10 +277,10 @@ class RouteVideo extends Component {
     const { isMuted, videoStatus, isPlaying, dispatch, controlsVisible = true } = this.props;
     const { error } = this.state;
     return (
-      <div className="min-h-[160px] relative w-full aspect-[1.593] bg-black">
+      <div className="min-h-[160px] md:max-h-[calc(100dvh-420px)] relative w-full aspect-[1.593] bg-black">
         <video
           ref={this.video}
-          className="block h-full w-full"
+          className="block h-full w-full object-contain"
           aria-label="Drive video"
           playsInline
           muted={isMuted}

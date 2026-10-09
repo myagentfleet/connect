@@ -112,6 +112,12 @@ async function speedKeyboard(page) {
     'playback-speed-menu', 'The speed button identifies its open menu');
   assert.equal(await page.$$eval('[role="menuitemradio"][aria-checked="true"]', (elements) => elements.length), 1,
     'Exactly one speed option is checked');
+  const rows = await page.$$eval('[role="menuitemradio"]', (elements) => elements.map((element) => ({
+    label: element.textContent.trim(), height: element.getBoundingClientRect().height,
+  })));
+  assert.ok(rows.length > 0 && rows.every(({ height }) => height >= 44 && height <= 45),
+    'Every playback speed menu row is between 44px and 45px high');
+  report.speedMenus ||= []; report.speedMenus.push({ width: page.viewport().width, rows });
   const selected = await page.evaluate(() => document.activeElement.textContent.trim());
   await page.keyboard.press('ArrowDown');
   assert.notEqual(await page.evaluate(() => document.activeElement.textContent.trim()), selected, 'ArrowDown moves within the speed menu');
@@ -226,13 +232,21 @@ async function capture(page, name, keepPointer = false) {
   report.screenshots.push(filename);
 }
 
+async function scrollToTop(page) {
+  await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+}
+
 async function layout(page, state) {
+  await scrollToTop(page);
   const measured = await page.evaluate(() => {
     const group = document.querySelector('[aria-label="Playback controls"]');
     const buttons = [...group.querySelectorAll('button[aria-label]')]
       .map((element) => ({ label: element.getAttribute('aria-label'), ...element.getBoundingClientRect().toJSON() }));
     const timestamp = group.querySelector('[aria-label="Selection playback time"]');
-    return { width: innerWidth, scrollWidth: document.documentElement.scrollWidth, buttons,
+    return { width: innerWidth, height: innerHeight, scrollY, scrollWidth: document.documentElement.scrollWidth, buttons,
       group: group.getBoundingClientRect().toJSON(), timestamp: timestamp?.getBoundingClientRect().toJSON(),
       video: document.querySelector('.DriveView video').getBoundingClientRect().toJSON(),
       timeline: document.querySelector('[aria-label="Drive timeline"]').getBoundingClientRect().toJSON() };
@@ -247,6 +261,10 @@ async function layout(page, state) {
   assert.ok(measured.timeline.top >= measured.video.bottom - 1, 'The timeline sits beneath the video');
   assert.ok(measured.group.top >= measured.timeline.bottom - 1, 'The footer sits beneath the timeline');
   assert.ok(Math.abs(measured.group.width - measured.timeline.width) < 2, 'The footer spans the player timeline width');
+  if (measured.width >= 1280) {
+    assert.equal(measured.scrollY, 0, 'Desktop footer geometry is measured from the top of the page');
+    assert.ok(measured.group.bottom <= measured.height, 'The complete desktop playback footer fits inside the viewport');
+  }
   if (measured.width <= 390) {
     assert.ok(measured.timestamp, 'Playback timestamp exists');
     assert.ok(measured.timestamp.bottom <= Math.min(...measured.buttons.map(({ y }) => y)) + 1,
@@ -281,6 +299,11 @@ async function mapCapture(page, name) {
       };
     });
     report.mapGeometry ||= []; report.mapGeometry.push(geometry);
+    assert.ok(geometry.wrapperContainsMap && geometry.wrapperVisibility === 'visible', 'The measured wrapper contains the visible map');
+    for (const name of ['canvas', 'map']) {
+      assert.ok(geometry[name].height > 0 && Math.abs(geometry[name].height - geometry.wrapper.height) <= 1,
+        `The narrow ${name} height matches its visible wrapper without inherited minimum-height clipping`);
+    }
   }
   // The real DriveMap WebGL marker must render, not merely a blank canvas.
   let bluePixels = 0;
@@ -470,10 +493,8 @@ async function main() {
       await page.waitForSelector('.DriveView .thumbnailImage.images');
       for (const viewport of viewports) {
         await page.setViewport(viewport); await delay(150);
+        await scrollToTop(page);
         await capture(page, 'comparison-video');
-        const filename = `comparison-player-${viewport.width}.png`;
-        await (await page.$('.DriveView')).screenshot({ path: resolve(output, filename) });
-        report.screenshots.push(filename);
         const metrics = await page.evaluate(() => ({ viewport: innerWidth, scrollWidth: document.documentElement.scrollWidth,
           video: document.querySelector('.DriveView video').getBoundingClientRect().toJSON(),
           timeline: document.querySelector('[aria-label="Drive timeline"]').getBoundingClientRect().toJSON() }));
@@ -518,6 +539,7 @@ async function main() {
         await page.waitForSelector('.DriveView .thumbnailImage.images');
         for (const viewport of viewports) {
           await page.setViewport(viewport); await delay(150);
+          await scrollToTop(page);
           await capture(page, 'video'); await layout(page, 'video'); await elapsedTime(page);
           await mapCapture(page, 'map'); await timelineHover(page);
           if (viewport.width === 390) {
@@ -544,7 +566,8 @@ async function main() {
         assert.equal(await page.$('button[aria-label="Play video"], button[aria-label="Pause video"]'), null,
           'Video play overlay is absent while an error needs attention');
         for (const viewport of viewports) {
-          await page.setViewport(viewport); await capture(page, 'missing-first-error'); await layout(page, 'error');
+          await page.setViewport(viewport); await scrollToTop(page);
+          await capture(page, 'missing-first-error'); await layout(page, 'error');
           if (viewport.width <= 390) await narrowErrorCard(page);
         }
         await page.setViewport(viewports[1]); await textButton(page, 'Map');
