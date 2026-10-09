@@ -1,0 +1,118 @@
+name: Validate connect container without publishing
+
+on:
+  push:
+    branches: [verify/770-container]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  container:
+    if: github.repository == 'myagentfleet/connect' && github.ref == 'refs/heads/verify/770-container'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build the repository Dockerfile without publishing
+        run: |
+          docker build --file Dockerfile \
+            --tag "connect-validation:${GITHUB_SHA}" \
+            --build-arg "VITE_APP_GIT_SHA=${GITHUB_SHA}" \
+            --build-arg "VITE_APP_GIT_TIMESTAMP=$(git show -s --format=%cI)" \
+            .
+
+      - name: Start the image on loopback only
+        run: |
+          docker run --detach --name connect-container-check \
+            --publish 127.0.0.1:8080:80 "connect-validation:${GITHUB_SHA}"
+          docker cp connect-container-check:/usr/share/nginx/html/index.html "$RUNNER_TEMP/connect-container-index.html"
+
+      - name: Check root, deep SPA URL, and built assets
+        timeout-minutes: 2
+        run: |
+          python3 - <<'PY'
+          import os
+          import time
+          from html.parser import HTMLParser
+          from pathlib import Path
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import urlsplit
+          from urllib.request import HTTPRedirectHandler, ProxyHandler, build_opener
+
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, request, file, code, message, headers, new_url):
+                  raise AssertionError(f'Unexpected redirect to {new_url}')
+
+          urlopen = build_opener(ProxyHandler({}), NoRedirect()).open
+
+          origin = 'http://127.0.0.1:8080'
+          expected = Path(os.environ['RUNNER_TEMP'], 'connect-container-index.html').read_bytes()
+          deadline = time.monotonic() + 45
+          while True:
+              try:
+                  with urlopen(origin + '/', timeout=2) as response:
+                      if response.status == 200 and response.read() == expected:
+                          break
+              except (OSError, URLError):
+                  pass
+              if time.monotonic() >= deadline:
+                  raise RuntimeError('Container did not serve its built index within 45 seconds')
+              time.sleep(1)
+
+          paths = ['/', '/aaaaaaaaaaaaaaaa/2026-08-06--12-00-00/0/20?dialog=route-info']
+          for path in paths:
+              with urlopen(origin + path, timeout=5) as response:
+                  assert response.status == 200, (path, response.status)
+                  assert response.headers.get_content_type() == 'text/html', path
+                  assert response.read() == expected, f'{path} did not return the built SPA index'
+              print(f'PASS {path}: built SPA index')
+
+          class Assets(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.items = []
+                  self.has_root = False
+
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  self.has_root |= attrs.get('id') == 'root'
+                  if tag == 'script' and attrs.get('src'):
+                      self.items.append((attrs['src'], 'javascript'))
+                  if tag == 'link' and attrs.get('rel') == 'stylesheet' and attrs.get('href'):
+                      self.items.append((attrs['href'], 'css'))
+
+          assets = Assets()
+          assets.feed(expected.decode('utf-8'))
+          assert assets.has_root, 'Built index has no app root'
+          assert {kind for _, kind in assets.items} == {'javascript', 'css'}, 'Missing built JS or CSS assets'
+          for path, kind in assets.items:
+              parsed = urlsplit(path)
+              assert not parsed.scheme and not parsed.netloc and parsed.path.startswith('/assets/'), path
+              with urlopen(origin + path, timeout=5) as response:
+                  assert response.status == 200, (path, response.status)
+                  assert kind in response.headers.get_content_type(), (path, response.headers)
+                  body = response.read()
+                  assert body and body != expected, f'{path} returned an empty body or SPA fallback'
+              print(f'PASS {path}: nonempty {kind} asset')
+
+          try:
+              urlopen(origin + '/assets/container-check-missing.js', timeout=5)
+          except HTTPError as error:
+              assert error.code == 404, error.code
+          else:
+              raise AssertionError('Missing static asset must return 404, not the SPA index')
+          print('PASS missing static asset: 404')
+          PY
+
+      - name: Show container logs and clean up
+        if: always()
+        run: |
+          if docker container inspect connect-container-check >/dev/null 2>&1; then
+            docker logs connect-container-check || true
+            docker rm --force connect-container-check
+          fi
