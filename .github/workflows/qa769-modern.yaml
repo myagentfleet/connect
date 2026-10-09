@@ -24,6 +24,7 @@ jobs:
     env:
       FINAL_CANDIDATE_SHA: f4941336ab2516fa20dfa5dc515047f4d105ce35
       QA769_CASE: controls-and-responsive
+      QA769_HEADLESS: 'false'
       QA769_REVISION_LABEL: ${{ matrix.revision }}
       QA769_CAPTURE_ONLY: ${{ matrix.capture_only }}
       QA769_OUTPUT: ${{ github.workspace }}/results/${{ matrix.revision }}
@@ -72,8 +73,8 @@ jobs:
           bun run test 2>&1 | tee "$QA769_OUTPUT/test.log"
       - name: Install gallery-matched browser tools without saving dependencies
         run: bun add --no-save --trust puppeteer@24.16.0 pngjs@7.0.0 2>&1 | tee "$QA769_OUTPUT/browser-tools.log"
-      - name: Exercise candidate or capture healthy baseline
-        run: node scripts/qa769-modern.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
+      - name: Exercise headed Chrome with a desktop display
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" node scripts/qa769-modern.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
       - name: Upload diagnostics even on failure
         if: always()
         uses: actions/upload-artifact@v4

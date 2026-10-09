@@ -14,6 +14,7 @@ const output = resolve(process.env.QA769_OUTPUT || 'qa769-results');
 const fixtures = resolve(process.env.QA769_FIXTURES || 'public/demo-video');
 const captureOnly = process.env.QA769_CAPTURE_ONLY === 'true';
 const caseFilter = process.env.QA769_CASE?.trim() || null;
+const headless = process.env.QA769_HEADLESS !== 'false';
 const VIDEO = '.DriveView video';
 const TIMELINE = '[role="slider"][aria-label="Drive timeline"]';
 const SPEED = 'button[aria-label="Playback speed"]';
@@ -24,7 +25,7 @@ const routes = { complete: 11, first: 12, middle: 13 };
 const viewports = [320, 390, 1280, 1600].map((width) => ({ width, height: width < 600 ? 844 : 800, deviceScaleFactor: 1 }));
 const report = {
   started: new Date().toISOString(), revision: process.env.QA769_REVISION_LABEL || 'candidate',
-  captureOnly, caseFilter, cases: [], layouts: [], screenshots: [],
+  captureOnly, caseFilter, headless, cases: [], layouts: [], screenshots: [],
   scope: 'Production build, real Google Chrome, native media events, checked-in H.264/AAC MPEG-TS fixtures, UI-only playback commands. The explicitly labeled MSE scenario overrides only HLS capability discovery to exercise hls.js.',
   fixtures: 'Public-route metadata is deterministic; exact missing fragment URLs receive HTTP 404 via request interception, or real TS bytes after repair. Mapbox style is a plain deterministic background; the production WebGL route and marker render normally.',
   omissions: ['Native Safari/iOS/Android and installed PWAs', 'Physical audio output, Bluetooth, background/foreground and OS media controls', 'Production map tiles and real driving footage', 'Deterministically delayed native play promise rejection (covered separately by unit tests)'],
@@ -381,7 +382,7 @@ async function main() {
     preview: { host: '127.0.0.1', port: 0, strictPort: true } });
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   const browser = await puppeteer.launch({ executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome',
-    headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+    headless, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
       '--disable-background-networking', '--force-color-profile=srgb', '--enable-unsafe-swiftshader', '--use-angle=swiftshader'] })
     .catch(async (error) => { await server.close(); throw error; });
   report.browser = await browser.version();
@@ -532,6 +533,12 @@ async function main() {
 
     if (!captureOnly) {
       await scenario('controls-and-responsive', async ({ page, result, openRoute }) => {
+        result.inputCapabilities = await page.evaluate(() => Object.fromEntries(
+          ['(hover: hover)', '(hover: none)', '(any-hover: hover)', '(pointer: fine)', '(pointer: coarse)']
+            .map((query) => [query, matchMedia(query).matches])));
+        console.log(`DESKTOP_INPUT_CAPABILITIES ${JSON.stringify(result.inputCapabilities)}`);
+        assert.ok(result.inputCapabilities['(hover: hover)'] && result.inputCapabilities['(pointer: fine)'],
+          'The desktop interaction scenario requires a real hover-capable fine pointer');
         await openRoute('complete'); await playing(page); await pause(page);
         const paused = await media(page); await delay(400);
         assert.ok(Math.abs((await media(page)).time - paused.time) < 0.05, 'Pause stops the actual clock');
