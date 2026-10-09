@@ -21,7 +21,7 @@ const FIXED_TIMESTAMP = Date.parse(FIXED_TIME);
 const LOCALE = 'en-US';
 const TIMEZONE = 'America/Los_Angeles';
 const CHANGE_THRESHOLD = 0.0001;
-const CAPTURE_CONCURRENCY = 6;
+const CAPTURE_CONCURRENCY = 4;
 const CLIP_FILENAME = 'coastal-drive.mp4';
 const CLIP_ROUTE_PATH = `/${DONGLE_ID}/${LOG_ID}/10/30`;
 
