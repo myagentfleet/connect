@@ -1,5 +1,5 @@
 # Validation only: publish separately from the fix PR.
-name: qa769-map-view
+name: qa769-seek-regressions
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      FINAL_CANDIDATE_SHA: 2d3bca154c33b09416f9826fad113863adb25946
+      FINAL_CANDIDATE_SHA: 42a2660699489962c5304f37d5e72c485a7fa29b
       QA769_HEADLESS: 'false'
       QA769_REVISION_LABEL: candidate
       QA769_CAPTURE_ONLY: 'false'
