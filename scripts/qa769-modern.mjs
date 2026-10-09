@@ -483,7 +483,7 @@ async function main() {
   report.browser = await browser.version();
 
   async function scenario(name, run, { forceMse = false, comparison = false } = {}) {
-    if (caseFilter && name !== caseFilter) return;
+    if (caseFilter && !caseFilter.split(',').includes(name)) return;
     const context = await browser.createBrowserContext();
     const page = await context.newPage();
     const result = { name, status: 'running', forceMse, comparison, requests: [], console: [], pageErrors: [], held: [], healed: new Set() };
@@ -640,6 +640,19 @@ async function main() {
         await openRoute('complete'); await playing(page); await pause(page);
         const paused = await media(page); await delay(400);
         assert.ok(Math.abs((await media(page)).time - paused.time) < 0.05, 'Pause stops the actual clock');
+        const primary = await page.waitForSelector('button[aria-label="Play"]', { visible: true });
+        await primary.hover();
+        await page.waitForFunction((element) => element.matches(':hover')
+          && getComputedStyle(element).backgroundColor === 'rgb(229, 233, 236)', {}, primary);
+        const recordPrimary = async (phase) => {
+          const style = await primary.evaluate((element) => ({ hovered: element.matches(':hover'),
+            hoverCapable: matchMedia('(hover: hover)').matches, background: getComputedStyle(element).backgroundColor,
+            color: getComputedStyle(element).color }));
+          result.primaryHover ||= {}; result.primaryHover[phase] = style;
+          assert.ok(style.hovered && style.hoverCapable, 'The desktop primary control is actually hovered');
+          assert.equal(style.background, 'rgb(229, 233, 236)', 'The desktop primary control retains its light hover feedback');
+        };
+        await capture(page, 'primary-control-hover', true, recordPrimary);
         await click(page, 'button[aria-label="Play video"]'); await playing(page);
         await click(page, 'button[aria-label="Pause video"]'); await pause(page);
         await page.focus('button[aria-label="Play video"]'); await page.keyboard.press('Enter'); await playing(page);

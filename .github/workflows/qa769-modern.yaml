@@ -1,5 +1,5 @@
 # Validation only: publish separately from the fix PR.
-name: qa769-seek-regressions
+name: qa769-control-contrast
 
 on:
   push:
@@ -15,10 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      FINAL_CANDIDATE_SHA: 0996a76f1a3d963cde7f0d10b211c5cd02fb0c0e
+      FINAL_CANDIDATE_SHA: fd173c1c153e1f893494963675472ad4e448a7ce
       QA769_HEADLESS: 'false'
       QA769_REVISION_LABEL: candidate
       QA769_CAPTURE_ONLY: 'false'
+      QA769_CASE: comparison-healthy-player,controls-and-responsive
       QA769_OUTPUT: ${{ github.workspace }}/results/candidate
       QA769_FIXTURES: ${{ github.workspace }}/harness/public/demo-video
       PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
@@ -64,28 +65,26 @@ jobs:
         run: bun add --no-save --trust puppeteer@24.16.0 pngjs@7.0.0 2>&1 | tee "$QA769_OUTPUT/browser-tools.log"
       - name: Exercise headed Chrome with a desktop display
         run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" node scripts/qa769-modern.mjs 2>&1 | tee "$QA769_OUTPUT/browser.log"
-      - name: Verify all seven Chrome scenarios ran without a case filter
+      - name: Verify focused desktop design and control scenarios
         run: |
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
           import { readFileSync } from 'node:fs';
           import { resolve } from 'node:path';
           const report = JSON.parse(readFileSync(resolve(process.env.QA769_OUTPUT, 'report.json'), 'utf8'));
-          assert.equal(report.caseFilter, null);
+          assert.equal(report.sha, process.env.FINAL_CANDIDATE_SHA);
+          assert.equal(report.caseFilter, process.env.QA769_CASE);
           assert.equal(report.captureOnly, false);
-          assert.deepEqual(report.cases.map(({ name }) => name).sort(), [
-            'comparison-healthy-player', 'controls-and-responsive', 'missing-first-and-retry',
-            'natural-chrome-middle-gap-recovery', 'forced-mse-prefetch-and-loops',
-            'startup-seek-and-route-reset', 'navigation-cancellation-and-loading',
-          ].sort());
+          assert.deepEqual(report.cases.map(({ name }) => name).sort(), process.env.QA769_CASE.split(',').sort());
           assert.ok(report.cases.every(({ status }) => status === 'passed'));
           assert.equal(report.passed, true);
-          for (const state of ['loading', 'failed']) {
-            assert.ok(report.mapGeometry.some((geometry) => geometry.videoState === state
-              && geometry.videoOverlayCount === 0 && geometry.videoControlCount === 0 && geometry.mapReceivesPointer));
+          const controls = report.cases.find(({ name }) => name === 'controls-and-responsive');
+          for (const phase of ['before', 'after']) {
+            assert.equal(controls.primaryHover[phase].background, 'rgb(229, 233, 236)');
+            assert.equal(controls.primaryHover[phase].hovered, true);
           }
           assert.ok(report.menuCaptureStates.some(({ label, opacity }) => label === 'More info' && opacity === '1'));
-          console.log('All seven full Chrome scenarios passed, including usable Map views during loading and errors.');
+          console.log('Both focused Chrome design scenarios passed, including desktop hover contrast and responsive controls.');
           JS
       - name: Upload diagnostics even on failure
         if: always()
