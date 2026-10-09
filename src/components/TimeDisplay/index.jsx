@@ -66,6 +66,7 @@ const styles = (theme) => ({
     borderRadius: '50%',
     color: theme.palette.grey[999],
     backgroundColor: theme.palette.common.white,
+    '&:hover': { backgroundColor: theme.palette.common.white },
     '&:active': { backgroundColor: '#c4cbd0' },
     '&&:focus-visible': { outlineColor: theme.palette.grey[999] },
     '@media (hover: hover)': { '&:hover': { backgroundColor: '#e5e9ec' } },
