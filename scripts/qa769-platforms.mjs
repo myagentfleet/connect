@@ -28,6 +28,7 @@ const link = (kind) => `.DriveEntry[href="/deadbeefdeadbeef/00000000--${String(i
 const report = {
   started: new Date().toISOString(), engine, nativeProfile, caseFilter, hostOS: process.platform,
   traceCommands, buildOnly, existingDist: existingDist || null,
+  playbackVerification: 'Require 200ms without a seek or invalid playback state, media-clock advancement above 0.15s, and new decoded or presented frames after that baseline.',
   acceptanceRun: process.env.QA769_DIAGNOSTIC_ONLY !== 'true',
   scope: 'Production build, Playwright-patched browser engine, real media decoding and native media clock. Application cases use UI controls; the explicitly labeled plain-video reference uses scripted native media commands without application code.',
   profile: nativeProfile ? 'macOS WebKit with Playwright iPhone 13 emulation; requires native HLS. This is not physical iOS or branded Safari.' : 'Unmodified desktop browser capabilities; application selects its normal transport.',
@@ -65,13 +66,27 @@ async function playing(page) {
   }, VIDEO);
   const before = await media(page);
   assert.ok(before.frames !== null || before.presentedFrames !== null, 'A real decoded/presented frame counter must be available');
-  await page.waitForFunction(({ selector, before }) => {
+  await page.evaluate(() => { globalThis.qaPlaybackProbe = null; });
+  await page.waitForFunction((selector) => {
     const video = document.querySelector(selector);
-    const decoded = video.getVideoPlaybackQuality?.().totalVideoFrames;
-    const presented = globalThis.qaFrames.get(video);
-    return video.currentTime > before.time + 0.15
-      && ((decoded !== undefined && decoded > (before.frames ?? 0)) || (presented !== undefined && presented > (before.presentedFrames ?? 0)));
-  }, { selector: VIDEO, before });
+    if (!video || video.paused || video.seeking || video.readyState < 2 || !video.videoWidth) {
+      globalThis.qaPlaybackProbe = null;
+      return false;
+    }
+    const id = video.dataset.qaVideo;
+    const seeks = globalThis.qaEvents.filter((event) => event.id === id && event.type === 'seeking').length;
+    const at = performance.now(), time = video.currentTime;
+    const frames = video.getVideoPlaybackQuality?.().totalVideoFrames ?? null;
+    const presentedFrames = globalThis.qaFrames.get(video) ?? null;
+    const probe = globalThis.qaPlaybackProbe;
+    if (!probe || probe.id !== id || probe.seeks !== seeks) {
+      globalThis.qaPlaybackProbe = { id, seeks, at, time, frames, presentedFrames };
+      return false;
+    }
+    return at - probe.at >= 200 && time > probe.time + 0.15
+      && ((frames !== null && probe.frames !== null && frames > probe.frames)
+        || (presentedFrames !== null && probe.presentedFrames !== null && presentedFrames > probe.presentedFrames));
+  }, VIDEO);
   if (nativeProfile) {
     const current = await media(page);
     assert.match(current.currentSrc, /^http:\/\/127\.0\.0\.1:.*\.m3u8$/, 'The emulated iPhone profile must actually use a native HLS URL');
