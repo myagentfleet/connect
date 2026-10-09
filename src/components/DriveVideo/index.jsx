@@ -12,6 +12,8 @@ import { currentOffset } from '../../timeline';
 import { seek, bufferVideo } from '../../timeline/playback';
 import { isIos, isFirefox } from '../../utils/browser.js';
 
+const DEFAULT_ASPECT_RATIO = 526 / 330;
+
 // Leading-edge debounce: run immediately, then ignore calls until `wait` ms after the last one.
 function debounceLeading(func, wait) {
   let timeout = null;
@@ -93,6 +95,7 @@ class DriveVideo extends Component {
     this.onHlsError = this.onHlsError.bind(this);
     this.onVideoError = this.onVideoError.bind(this);
     this.onVideoResume = this.onVideoResume.bind(this);
+    this.updateVideoDimensions = this.updateVideoDimensions.bind(this);
     this.syncVideo = debounceLeading(this.syncVideo.bind(this), 200);
     this.firstSeek = true;
 
@@ -101,6 +104,7 @@ class DriveVideo extends Component {
     this.state = {
       src: null,
       videoError: null,
+      aspectRatio: DEFAULT_ASPECT_RATIO,
     };
   }
 
@@ -219,19 +223,28 @@ class DriveVideo extends Component {
     if (videoError) this.setState({ videoError: null });
   }
 
+  updateVideoDimensions() {
+    const video = this.videoPlayer.current?.getInternalPlayer();
+    const aspectRatio = video?.videoWidth / video?.videoHeight;
+    if (this.state.src && video?.videoWidth > 0 && video?.videoHeight > 0
+      && Number.isFinite(aspectRatio) && aspectRatio > 0 && aspectRatio !== this.state.aspectRatio) {
+      this.setState({ aspectRatio });
+    }
+  }
+
   updateVideoSource(prevProps) {
     let { src } = this.state;
     const { currentRoute } = this.props;
     if (!currentRoute) {
       if (src !== '') {
-        this.setState({ src: '', videoError: null });
+        this.setState({ src: '', videoError: null, aspectRatio: DEFAULT_ASPECT_RATIO });
       }
       return;
     }
 
     if (src === '' || !prevProps.currentRoute || prevProps.currentRoute?.fullname !== currentRoute.fullname) {
       src = api.video.getQcameraStreamUrl(currentRoute.fullname, currentRoute.share_exp, currentRoute.share_sig);
-      this.setState({ src, videoError: null });
+      this.setState({ src, videoError: null, aspectRatio: DEFAULT_ASPECT_RATIO });
       this.syncVideo();
     }
   }
@@ -308,9 +321,10 @@ class DriveVideo extends Component {
 
   render() {
     const { desiredPlaySpeed, isBufferingVideo, currentRoute, onAudioStatusChange, isMuted } = this.props;
-    const { src, videoError } = this.state;
+    const { src, videoError, aspectRatio } = this.state;
 
     const onPlayerReady = (player) => {
+      this.updateVideoDimensions();
       if (isIos()) { // ios does not support hls.js and on other browsers hls.js does not directly play the m3u8 so audioTracks are not visible
         const videoElement = player.getInternalPlayer();
         if (videoElement && videoElement.audioTracks && videoElement.audioTracks.length > 0) {
@@ -331,7 +345,7 @@ class DriveVideo extends Component {
     };
 
     return (
-      <div className="w-full sm:min-h-[200px] relative max-w-[964px] m-[0_auto] aspect-[1.593]">
+      <div className="DriveVideo w-full relative max-w-[964px] m-[0_auto]" style={{ aspectRatio }}>
         <VideoOverlay loading={isBufferingVideo} error={videoError} />
         <ReactPlayer
           ref={this.videoPlayer}
@@ -346,6 +360,13 @@ class DriveVideo extends Component {
             hlsVersion: '1.4.8',
             hlsOptions: {
               maxBufferLength: 40,
+            },
+            file: {
+              attributes: {
+                onLoadedMetadata: this.updateVideoDimensions,
+                onResize: this.updateVideoDimensions,
+                style: { width: '100%', height: '100%', objectFit: 'contain' },
+              },
             },
           }}
           playbackRate={desiredPlaySpeed}

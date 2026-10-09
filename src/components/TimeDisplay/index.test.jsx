@@ -48,14 +48,26 @@ test('playback controls retain seeking, speed, pause/resume and mute behavior', 
   expect(dispatch).toHaveBeenLastCalledWith({ type: 'ACTION_SEEK', offset: 20000 });
   fireEvent.click(screen.getByRole('button', { name: 'Jump forward 10 seconds' }));
   expect(dispatch).toHaveBeenLastCalledWith({ type: 'ACTION_SEEK', offset: 40000 });
-  fireEvent.click(screen.getByRole('button', { name: 'Increase play speed by 1 step' }));
+  fireEvent.change(screen.getByRole('combobox', { name: 'Playback speed' }), { target: { value: '2' } });
   expect(dispatch).toHaveBeenLastCalledWith({ type: 'ACTION_PLAY', speed: 2 });
   fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
   expect(dispatch).toHaveBeenLastCalledWith({ type: 'ACTION_PAUSE' });
   fireEvent.click(screen.getByRole('button', { name: 'Unpause' }));
   expect(dispatch).toHaveBeenLastCalledWith({ type: 'ACTION_PLAY', speed: 2 });
-  fireEvent.click(screen.getByRole('button', { name: 'Decrease play speed by 1 step' }));
+  fireEvent.change(screen.getByRole('combobox', { name: 'Playback speed' }), { target: { value: '1' } });
   expect(dispatch).toHaveBeenLastCalledWith({ type: 'ACTION_PLAY', speed: 1 });
   fireEvent.click(screen.getByRole('button', { name: 'Unmute' }));
   expect(onMuteToggle).toHaveBeenCalledOnce();
+});
+
+test('changing the playback rate while paused preserves paused intent and applies on resume', () => {
+  const { dispatch } = renderControls();
+  fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+  dispatch.mockClear();
+  fireEvent.change(screen.getByRole('combobox', { name: 'Playback speed' }), { target: { value: '0.25' } });
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(screen.getByRole('combobox', { name: 'Playback speed' })).toHaveValue('0.25');
+  expect(screen.getByRole('button', { name: 'Unpause' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Unpause' }));
+  expect(dispatch).toHaveBeenLastCalledWith({ type: 'ACTION_PLAY', speed: 0.25 });
 });

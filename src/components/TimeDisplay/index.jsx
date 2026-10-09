@@ -7,29 +7,20 @@ import Typography from '@material-ui/core/Typography';
 import IconButton from '@material-ui/core/IconButton';
 import { Tooltip } from '@material-ui/core';
 
-import { DownArrow, Forward10, Pause, PlayArrow, Replay10, UpArrow, VolumeUp, VolumeOff } from '../../icons';
+import { Forward10, Pause, PlayArrow, Replay10, VolumeUp, VolumeOff } from '../../icons';
 import { currentOffset } from '../../timeline';
 import { seek, play, pause } from '../../timeline/playback';
 import { getSegmentNumber } from '../../utils';
 import { isIos } from '../../utils/browser.js';
+import './index.css';
 
-const timerSteps = [
-  0.1,
-  0.25,
-  0.5,
-  1,
-  2,
-  4,
-  8,
-];
+const timerSteps = [0.1, 0.25, 0.5, 1, 2, 4, 8];
 
 const styles = (theme) => ({
   base: {
-    display: 'flex',
-    alignItems: 'center',
-    backgroundColor: theme.palette.grey[999],
-    height: '64px',
-    borderRadius: '32px',
+    backgroundColor: theme.palette.grey[950],
+    border: '1px solid rgba(255, 255, 255, 0.1)',
+    borderRadius: 16,
     padding: theme.spacing.unit,
     width: 400,
     maxWidth: '100%',
@@ -41,73 +32,59 @@ const styles = (theme) => ({
       opacity: 1,
       pointerEvents: 'auto',
     },
-    '&.isThin': {
-      height: 50,
-      paddingBottom: 0,
-      paddingTop: 0,
-      '@media (max-width: 400px)': {
-        flexWrap: 'wrap',
-        height: 'auto',
-        justifyContent: 'space-between',
-        paddingBottom: theme.spacing.unit,
-        paddingTop: theme.spacing.unit,
-      },
-    },
-  },
-  desiredPlaySpeedContainer: {
-    marginRight: theme.spacing.unit * 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    minWidth: '40px',
   },
   icon: {
-    width: '98%',
-    height: '98%',
-    '&.dim': {
-      color: theme.palette.grey[300],
-    },
-    '&.small': {
-      width: '80%',
-      height: '80%',
-    },
-    '&.circle': {
-      border: `1px solid ${theme.palette.grey[900]}`,
-      borderRadius: '50%',
-    },
+    width: 24,
+    height: 24,
   },
   iconButton: {
-    width: '40px',
-    height: '40px',
-  },
-  tinyArrowIcon: {
-    width: 12,
-    height: 12,
-    color: theme.palette.grey[500],
-    '&[disabled]': {
-      visibility: 'hidden',
+    width: 44,
+    height: 44,
+    justifySelf: 'center',
+    color: theme.palette.grey[100],
+    '&:focus-visible': {
+      outline: '2px solid #007cbf',
+      outlineOffset: 2,
     },
   },
-  rightBorderBox: {
-    borderRight: `1px solid ${theme.palette.grey[900]}`,
-  },
-  leftBorderBox: {
-    borderLeft: `1px solid ${theme.palette.grey[900]}`,
+  playButton: {
+    backgroundColor: theme.palette.grey[800],
+    color: '#fff',
+    '&:hover': {
+      backgroundColor: theme.palette.grey[700],
+    },
   },
   currentTime: {
-    margin: `0 ${theme.spacing.unit * 1}px`,
-    fontSize: 15,
+    fontSize: 14,
+    lineHeight: '20px',
     fontWeight: 500,
     fontVariantNumeric: 'tabular-nums',
     whiteSpace: 'nowrap',
     display: 'block',
-    flexGrow: 1,
-    '@media (max-width: 400px)': {
-      '.isThin &': {
-        flexBasis: '100%',
-        margin: '0 0 4px',
-        order: -1,
-      },
+  },
+  audioControl: {
+    display: 'flex',
+    justifyContent: 'center',
+  },
+  speedSelect: {
+    width: '100%',
+    minWidth: 0,
+    height: 44,
+    padding: '0 2px',
+    border: '1px solid rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    backgroundColor: 'transparent',
+    color: '#fff',
+    fontSize: 12,
+    fontFamily: 'inherit',
+    fontVariantNumeric: 'tabular-nums',
+    cursor: 'pointer',
+    '&:focus-visible': {
+      outline: '2px solid #007cbf',
+      outlineOffset: 2,
+    },
+    '& option': {
+      backgroundColor: theme.palette.grey[900],
     },
   },
 });
@@ -115,23 +92,18 @@ const styles = (theme) => ({
 class TimeDisplay extends Component {
   static getDerivedStateFromProps(props, state) {
     if (props.desiredPlaySpeed !== 0 && props.desiredPlaySpeed !== state.desiredPlaySpeed) {
-      return {
-        ...state,
-        desiredPlaySpeed: props.desiredPlaySpeed,
-      };
+      return { desiredPlaySpeed: props.desiredPlaySpeed };
     }
-    return state;
+    return null;
   }
 
   constructor(props) {
     super(props);
 
     this.textHolder = React.createRef();
-
     this.updateTime = this.updateTime.bind(this);
     this.togglePause = this.togglePause.bind(this);
-    this.increaseSpeed = this.increaseSpeed.bind(this);
-    this.decreaseSpeed = this.decreaseSpeed.bind(this);
+    this.changeSpeed = this.changeSpeed.bind(this);
     this.jumpBack = this.jumpBack.bind(this);
     this.jumpForward = this.jumpForward.bind(this);
 
@@ -154,15 +126,10 @@ class TimeDisplay extends Component {
     const offset = currentOffset();
     const { currentRoute } = this.props;
     const now = new Date(offset + currentRoute.start_time_utc_millis);
-    if (Number.isNaN(now.getTime())) {
-      return '...';
-    }
+    if (Number.isNaN(now.getTime())) return '...';
     let dateString = dayjs(now).format('HH:mm:ss');
     const seg = getSegmentNumber(currentRoute);
-    if (seg !== null) {
-      dateString = `${dateString} \u2013 ${seg}`;
-    }
-
+    if (seg !== null) dateString = dateString + ' \u2013 ' + seg;
     return dateString;
   }
 
@@ -175,150 +142,64 @@ class TimeDisplay extends Component {
   }
 
   updateTime() {
-    if (!this.mounted || !this.textHolder.current) {
-      return;
-    }
-    const newDisplayTime = this.getDisplayTime();
-    const { displayTime } = this.state;
-    if (newDisplayTime !== displayTime) {
-      this.setState({ displayTime: newDisplayTime });
-    }
-
+    if (!this.mounted || !this.textHolder.current) return;
+    const displayTime = this.getDisplayTime();
+    if (displayTime !== this.state.displayTime) this.setState({ displayTime });
     requestAnimationFrame(this.updateTime);
   }
 
-  decreaseSpeed() {
-    const { dispatch } = this.props;
-    const { desiredPlaySpeed } = this.state;
-    let curIndex = timerSteps.indexOf(desiredPlaySpeed);
-    if (curIndex === -1) {
-      curIndex = timerSteps.indexOf(1);
+  changeSpeed(event) {
+    const speed = Number(event.target.value);
+    if (!timerSteps.includes(speed)) return;
+    if (this.props.desiredPlaySpeed === 0) {
+      this.setState({ desiredPlaySpeed: speed });
+    } else {
+      this.props.dispatch(play(speed));
     }
-    curIndex = Math.max(0, curIndex - 1);
-    dispatch(play(timerSteps[curIndex]));
-  }
-
-  canDecreaseSpeed() {
-    const { desiredPlaySpeed } = this.state;
-    let curIndex = timerSteps.indexOf(desiredPlaySpeed);
-    if (curIndex === -1) {
-      curIndex = timerSteps.indexOf(1);
-    }
-    return curIndex > 0;
-  }
-
-  increaseSpeed() {
-    const { dispatch } = this.props;
-    const { desiredPlaySpeed } = this.state;
-    let curIndex = timerSteps.indexOf(desiredPlaySpeed);
-    if (curIndex === -1) {
-      curIndex = timerSteps.indexOf(1);
-    }
-    curIndex = Math.min(timerSteps.length - 1, curIndex + 1);
-    dispatch(play(timerSteps[curIndex]));
-  }
-
-  canIncreaseSpeed() {
-    const { desiredPlaySpeed } = this.state;
-    let curIndex = timerSteps.indexOf(desiredPlaySpeed);
-    if (curIndex === -1) {
-      curIndex = timerSteps.indexOf(1);
-    }
-    return curIndex < timerSteps.length - 1;
   }
 
   togglePause() {
     const { desiredPlaySpeed, dispatch } = this.props;
-    if (desiredPlaySpeed === 0) {
-      // eslint-disable-next-line react/destructuring-assignment
-      dispatch(play(this.state.desiredPlaySpeed));
-    } else {
-      dispatch(pause());
-    }
+    dispatch(desiredPlaySpeed === 0 ? play(this.state.desiredPlaySpeed) : pause());
   }
 
   render() {
     const { classes, zoom, desiredPlaySpeed: videoPlaySpeed, isThin, onMuteToggle, isMuted, hasAudio } = this.props;
     const { displayTime, desiredPlaySpeed } = this.state;
     const isPaused = videoPlaySpeed === 0;
-    const isExpandedCls = zoom ? 'isExpanded' : '';
-    const isThinCls = isThin ? 'isThin' : '';
+    const groupClasses = ['PlaybackControls', classes.base, zoom ? 'isExpanded' : '', isIos() ? 'isIos' : ''].join(' ');
+
     return (
-      <div className={ `${classes.base} ${isExpandedCls} ${isThinCls}` } role="group" aria-label="Playback controls">
-        <div className={ classes.rightBorderBox }>
-          <IconButton
-            className={ classes.iconButton }
-            onClick={ () => this.jumpBack(10000) }
-            aria-label="Jump back 10 seconds"
-          >
-            <Replay10 className={`${classes.icon} small dim`} />
+      <div className="PlaybackControlsContainer">
+        <div className={groupClasses} role="group" aria-label="Playback controls">
+          <IconButton className={classes.iconButton} onClick={() => this.jumpBack(10000)} aria-label="Jump back 10 seconds">
+            <Replay10 className={classes.icon} />
           </IconButton>
-        </div>
-        <div className={ classes.rightBorderBox }>
-          <IconButton
-            className={ classes.iconButton }
-            onClick={ () => this.jumpForward(10000) }
-            aria-label="Jump forward 10 seconds"
-          >
-            <Forward10 className={`${classes.icon} small dim`} />
+          <IconButton className={classes.iconButton} onClick={() => this.jumpForward(10000)} aria-label="Jump forward 10 seconds">
+            <Forward10 className={classes.icon} />
           </IconButton>
-        </div>
-        { !isThin && (
-          <Typography variant="caption" align="center" style={{ paddingTop: 4 }}>
-            CURRENT PLAYBACK TIME
-          </Typography>
-        )}
-        <Typography variant="body1" align="center" className={classes.currentTime}>
-          <span ref={this.textHolder}>{ displayTime }</span>
-        </Typography>
-        {!isIos() && (
-          <div className={ classes.desiredPlaySpeedContainer }>
-            <IconButton
-              className={classes.tinyArrowIcon}
-              onClick={this.increaseSpeed}
-              disabled={!this.canIncreaseSpeed()}
-              aria-label="Increase play speed by 1 step"
-            >
-              <UpArrow className={classes.tinyArrowIcon} />
-            </IconButton>
-            <Typography variant="body2" align="center">
-              {desiredPlaySpeed}
-              ×
+          <div className="PlaybackControlsTime">
+            {!isThin && <Typography variant="caption" align="center">CURRENT PLAYBACK TIME</Typography>}
+            <Typography variant="body1" align="center" className={classes.currentTime}>
+              <span ref={this.textHolder}>{displayTime}</span>
             </Typography>
-            <IconButton
-              className={classes.tinyArrowIcon}
-              onClick={this.decreaseSpeed}
-              disabled={!this.canDecreaseSpeed()}
-              aria-label="Decrease play speed by 1 step"
-            >
-              <DownArrow className={classes.tinyArrowIcon} />
-            </IconButton>
           </div>
-        )}
-        <div className={ classes.leftBorderBox }>
-          <Tooltip title={ !this.props.hasAudio ? "Enable audio recording through the \"Record and Upload Microphone Audio\" toggle on your device" : '' }>
-            <div>
-              <IconButton
-                className={ classes.iconButton }
-                onClick={onMuteToggle}
-                disabled={!hasAudio}
-                aria-label={isMuted ? 'Unmute' : 'Mute'}
-              >
-                {isMuted
-                  ? (<VolumeOff className={`${classes.icon} small ${!hasAudio ? 'dim' : ''}`} />)
-                  : (<VolumeUp className={`${classes.icon} small`} />)}
+          {!isIos() && (
+            <select className={classes.speedSelect} aria-label="Playback speed" value={desiredPlaySpeed} onChange={this.changeSpeed}>
+              {timerSteps.map((speed) => (
+                <option key={speed} value={speed}>{String(speed).replace(/^0\./, '.')}×</option>
+              ))}
+            </select>
+          )}
+          <Tooltip title={!hasAudio ? 'Enable audio recording through the "Record and Upload Microphone Audio" toggle on your device' : ''}>
+            <div className={classes.audioControl}>
+              <IconButton className={classes.iconButton} onClick={onMuteToggle} disabled={!hasAudio} aria-label={isMuted ? 'Unmute' : 'Mute'}>
+                {isMuted ? <VolumeOff className={classes.icon} /> : <VolumeUp className={classes.icon} />}
               </IconButton>
             </div>
           </Tooltip>
-        </div>
-        <div className={ classes.leftBorderBox }>
-          <IconButton
-            onClick={this.togglePause}
-            aria-label={isPaused ? 'Unpause' : 'Pause'}
-          >
-            {isPaused
-              ? (<PlayArrow className={classes.icon} />)
-              : (<Pause className={classes.icon} />)}
+          <IconButton className={[classes.iconButton, classes.playButton].join(' ')} onClick={this.togglePause} aria-label={isPaused ? 'Unpause' : 'Pause'}>
+            {isPaused ? <PlayArrow className={classes.icon} /> : <Pause className={classes.icon} />}
           </IconButton>
         </div>
       </div>
