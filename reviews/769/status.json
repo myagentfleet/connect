@@ -1,0 +1,949 @@
+{
+  "source": "fd173c1c153e1f893494963675472ad4e448a7ce",
+  "base": "109edb39ffa7a4ad3c38788ca2f39a286538ff07",
+  "tree": "b364deed0e5add454e199f84d5d3308df90cab6f",
+  "repository": "myagentfleet/connect",
+  "author": "Agent Fleet <myagentfleet@gmail.com>",
+  "committer": "Agent Fleet <myagentfleet@gmail.com>",
+  "issue_fully_resolved": false,
+  "upstream_pr_opened": false,
+  "generated_utc": "2026-10-09T19:12:41.455938+00:00",
+  "packaging_run": "37978620001",
+  "checks": {
+    "tests": 169,
+    "test_files": 17,
+    "lint_warnings": 0,
+    "lint_errors": 0,
+    "build": "passed in final Chrome CI",
+    "final_chrome_cases": 2,
+    "final_native_cases": 2,
+    "preceding_chrome_cases": 7,
+    "preceding_native_cases": 7
+  },
+  "diff": {
+    "comparedFrom": "109edb39ffa7a4ad3c38788ca2f39a286538ff07",
+    "comparedTo": "fd173c1c153e1f893494963675472ad4e448a7ce",
+    "changedFiles": 48,
+    "textAdditions": 2238,
+    "textDeletions": 1279,
+    "netTextLines": 959,
+    "binaryFixturesAdded": 6,
+    "binaryFixtureDescription": "Three qcamera.ts files and three sprite.jpg files; binary bytes are excluded from text-line counts.",
+    "literalNetRedSatisfied": false,
+    "categories": {
+      "tests": {
+        "additions": 1142,
+        "deletions": 153,
+        "net": 989,
+        "definition": "Changed text paths containing .test."
+      },
+      "nonTestText": {
+        "additions": 1096,
+        "deletions": 1126,
+        "net": -30,
+        "definition": "All changed text paths not containing .test."
+      },
+      "productionSourceExcludingDemo": {
+        "additions": 901,
+        "deletions": 1083,
+        "net": -182,
+        "definition": "Changed src/ text excluding .test. files and src/api/demo.js."
+      }
+    },
+    "interpretation": "Production and non-test reductions do not satisfy the literal whole-diff requirement. Tests are not assumed exempt. A legitimate independent demo/fixtures/documentation split alone is insufficient.",
+    "simplificationReview": "A verified 51-line dead Media cleanup is included. The completed review found no credible small cleanup that removes the remaining growth while preserving useful regression coverage and readability. No tests were removed, code minified, or files shuffled solely to alter counts."
+  },
+  "requirements": [
+    {
+      "id": "video-driven-state",
+      "requirement": "The native video element drives playback state.",
+      "status": "implemented",
+      "reason": "video.currentTime drives shared progress for the map and timeline. An explicit seek command is distinct from progress publication, avoiding feedback seeks. Requested playback intent during buffering/error is not a second clock.",
+      "evidence": [
+        "source-review",
+        "final-desktop",
+        "preceding-full-chrome"
+      ]
+    },
+    {
+      "id": "loading-seeking-errors",
+      "requirement": "Reliable loading, seeking, and error handling.",
+      "status": "verified-in-enumerated-scenarios",
+      "reason": "Coverage includes missing first/middle segments, manifest failures, Retry, a new healthy seek, prefetch, loops, pre-metadata seeks, route reset, and navigation cancellation. A bounded native missed-seek guard reports an unavailable selected time rather than publishing an incorrect settled clock.",
+      "limit": "An actionable unavailable-time error is not restoration of missing media. The native guard is conservative and does not classify all low-readiness or empty-seekable failures.",
+      "evidence": [
+        "preceding-full-chrome",
+        "preceding-native",
+        "final-native-touch"
+      ]
+    },
+    {
+      "id": "map-and-timeline",
+      "requirement": "Keep the map and thumbnail timeline.",
+      "status": "implemented-and-exercised",
+      "reason": "The timeline retains preview, loop, and keyboard interactions. Map mode hides loading/error overlays without replacing the video element; time, marker, and frame state are retained, and Video restores the appropriate status.",
+      "limit": "Fixture map behavior is covered; live map tile availability was not independently certified.",
+      "evidence": [
+        "source-review",
+        "preceding-full-chrome",
+        "final-desktop",
+        "final-native-touch"
+      ]
+    },
+    {
+      "id": "responsive-design",
+      "requirement": "Tasteful, modern design consistent with connect.",
+      "status": "reviewed-in-measured-states",
+      "reason": "The dark palette, grouped controls, primary circular action, narrow timestamp layout, desktop map relationship, menus, focus, and touch/desktop hover were designed and inspected. The four stable layout captures match the preceding source exactly after the final CSS-only fix.",
+      "limit": "Measured visual and keyboard checks are not comprehensive assistive-technology certification or proof of every possible viewport/state.",
+      "evidence": [
+        "final-desktop",
+        "final-native-touch",
+        "desktop-visual-review"
+      ]
+    },
+    {
+      "id": "desktop-platforms",
+      "requirement": "Works across desktop browsers.",
+      "status": "partial-platform-completion",
+      "reason": "Final-source Chrome unit/lint/build and two design cases passed. The preceding behavioral source passed the full seven Chrome cases. Earlier Firefox, WebKit, and stock Safari investigations provide bounded additional evidence.",
+      "limit": "An intermittent desktop WebKit/MSE startup freeze at 0.164 seconds has not been demonstrated eliminated. Emulated native playback and reference diagnostics are not broad desktop Safari acceptance.",
+      "evidence": [
+        "final-desktop",
+        "preceding-full-chrome",
+        "preceding-native"
+      ]
+    },
+    {
+      "id": "physical-mobile-browsers",
+      "requirement": "Works in iOS and Android browsers.",
+      "status": "not-fully-verified",
+      "reason": "Native HLS recovery and touch UI were exercised using macOS Playwright WebKit with iPhone emulation.",
+      "limit": "No physical iOS or Android browser acceptance run is established by this evidence.",
+      "evidence": [
+        "final-native-touch",
+        "preceding-native"
+      ]
+    },
+    {
+      "id": "installed-mobile-pwas",
+      "requirement": "Works as an installed iOS and Android PWA.",
+      "status": "unverified",
+      "reason": "No installed-device PWA acceptance evidence is available.",
+      "remaining": "Verify installation, foreground/background lifecycle, OS media behavior, and playback/seek/recovery on physical iOS and Android devices."
+    },
+    {
+      "id": "ios-audio",
+      "requirement": "Resolve reported iOS glitches in routes with audio.",
+      "status": "unverified-end-to-end",
+      "reason": "Audio track detection, mute/rate controls, audio fixtures, and the native transport path are covered.",
+      "remaining": "Establish physical audible output, audio/video synchronization, relevant output-route behavior, and resolution of the reported iOS glitch. Current evidence does not prove those outcomes."
+    },
+    {
+      "id": "net-red",
+      "requirement": "A net-red complete diff without architecture hacks.",
+      "status": "unmet",
+      "reason": "The complete 48-file comparison has 2238 text additions and 1279 deletions, a net increase of 959 lines. Production src excluding demo is smaller by 182 lines, but that subtotal is not a waiver of the whole-diff requirement.",
+      "remaining": "Resolve implementation and contribution scope honestly while preserving meaningful regression coverage; a demo-only split does not suffice.",
+      "evidence": [
+        "change-size-audit",
+        "source-review"
+      ]
+    },
+    {
+      "id": "demo-without-device",
+      "requirement": "Test through demo routes without a comma device.",
+      "status": "implemented",
+      "reason": "Deterministic synthetic H.264/AAC MPEG-TS fixtures with burned timestamps, sprites, route data, and genuine missing/repaired responses support reproducible playback checks.",
+      "evidence": [
+        "source-review",
+        "preceding-full-chrome",
+        "preceding-native"
+      ]
+    },
+    {
+      "id": "contribution-structure",
+      "requirement": "Small, clean, tested, reviewable contributions consistent with repository guidance.",
+      "status": "substantial-compliance-submission-scope-pending",
+      "reason": "The player follows existing React/Redux/Material UI conventions, production source shrinks, 169 tests pass, and independent review records concrete design/behavior decisions. QA workflows and review artifacts are separate from application changes.",
+      "proposedStructure": [
+        "Independently useful demo routes, media/sprite fixtures, documentation, and supporting tests.",
+        "Media-driven playback, transport, recovery, timeline/map, and controls with their relevant regression tests.",
+        "Separate source-pinned QA runners, workflows, screenshots, and review evidence."
+      ],
+      "limit": "This logical structure is not an accepted PR plan or a claim that file splitting achieves net red.",
+      "evidence": [
+        "source-review",
+        "final-desktop",
+        "change-size-audit"
+      ]
+    },
+    {
+      "id": "account-and-publication",
+      "requirement": "Use the requested GitHub identity and preserve the publication boundary.",
+      "status": "identity-verified-upstream-submission-not-authorized",
+      "reason": "The final commit author and committer are Agent Fleet <myagentfleet@gmail.com> in the verified myagentfleet/connect fork. No upstream PR is authorized or opened.",
+      "evidence": [
+        "identity-verification"
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "name": "final-chrome",
+      "artifact": 11620335347,
+      "archive_sha256": "f6a3844bb5fef3b8e17f4c8cd56e382dfc00d12929a96d8c3c8abdba76199a5f",
+      "archive_digest_verified": true,
+      "run": 37938004740,
+      "url": "https://github.com/myagentfleet/connect/actions/runs/37938004740",
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce",
+      "scope": "169 tests in 17 files, lint, build, and two focused Chrome scenarios.",
+      "report_sha256": "ca25d2b81a4a60ffe3d31f1d29bbf5b65d701be17b59939655226af0e90320a3",
+      "case_filter": "comparison-healthy-player,controls-and-responsive",
+      "recorded_cases": [
+        {
+          "name": "comparison-healthy-player",
+          "status": "passed"
+        },
+        {
+          "name": "controls-and-responsive",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "name": "final-native",
+      "artifact": 11620515234,
+      "archive_sha256": "d382768325746d5da5bef604377b9c4ff955fc6b22a471bc84395140c1c68c95",
+      "archive_digest_verified": true,
+      "run": 37938052645,
+      "url": "https://github.com/myagentfleet/connect/actions/runs/37938052645",
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce",
+      "scope": "Two focused native-HLS recovery cases and touch contrast. Patched macOS WebKit with iPhone emulation; acceptanceRun=false.",
+      "report_sha256": "008baa958db9c76aa7238bbf97d46bf937c4451cd3410946eceee2911d6d05f8",
+      "case_filter": "native-missed-seek-retry,native-missed-seek-seek",
+      "recorded_cases": [
+        {
+          "name": "native-missed-seek-retry",
+          "status": "passed"
+        },
+        {
+          "name": "native-missed-seek-seek",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "name": "full-chrome",
+      "artifact": 11619026407,
+      "archive_sha256": "25520e6edfd30c95840a52636adff9e538d262a1c5ae0849506bba70e949beb4",
+      "archive_digest_verified": true,
+      "run": 37936570974,
+      "url": "https://github.com/myagentfleet/connect/actions/runs/37936570974",
+      "source": "0996a76f1a3d963cde7f0d10b211c5cd02fb0c0e",
+      "scope": "All seven unfiltered Chrome scenarios, plus the unit/lint/build gate.",
+      "report_sha256": "6c1c2f176eb6e99df53ffa474e48ef133c8d48ee59ca4e773c92ab304ee86654",
+      "case_filter": null,
+      "recorded_cases": [
+        {
+          "name": "comparison-healthy-player",
+          "status": "passed"
+        },
+        {
+          "name": "controls-and-responsive",
+          "status": "passed"
+        },
+        {
+          "name": "missing-first-and-retry",
+          "status": "passed"
+        },
+        {
+          "name": "natural-chrome-middle-gap-recovery",
+          "status": "passed"
+        },
+        {
+          "name": "forced-mse-prefetch-and-loops",
+          "status": "passed"
+        },
+        {
+          "name": "startup-seek-and-route-reset",
+          "status": "passed"
+        },
+        {
+          "name": "navigation-cancellation-and-loading",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "name": "full-native",
+      "artifact": 11618751816,
+      "archive_sha256": "8ed7a57ab392b16c44f6652ea35d7b096b666909c26c61796fe4d7a7939576e4",
+      "archive_digest_verified": true,
+      "run": 37936618330,
+      "url": "https://github.com/myagentfleet/connect/actions/runs/37936618330",
+      "source": "0996a76f1a3d963cde7f0d10b211c5cd02fb0c0e",
+      "scope": "Seven native cases: three observations and four passing cases. Manifest repair uses the inherited 200ms check. The visual review found the touch defect later fixed.",
+      "report_sha256": "31819204d774ec0187624041eac2a97e7dd26cf380f5f8f6e653df8911c6dbce",
+      "case_filter": "native-ui-pixels-healthy-75,native-ui-pixels-healthy-125,native-ui-pixels-repaired-middle-75,native-manifest-error-and-repaired-retry,native-first-available-startup,native-missed-seek-retry,native-missed-seek-seek",
+      "recorded_cases": [
+        {
+          "name": "native-ui-pixels-healthy-75",
+          "status": "observed"
+        },
+        {
+          "name": "native-ui-pixels-healthy-125",
+          "status": "observed"
+        },
+        {
+          "name": "native-ui-pixels-repaired-middle-75",
+          "status": "observed"
+        },
+        {
+          "name": "native-first-available-startup",
+          "status": "passed"
+        },
+        {
+          "name": "native-missed-seek-retry",
+          "status": "passed"
+        },
+        {
+          "name": "native-missed-seek-seek",
+          "status": "passed"
+        },
+        {
+          "name": "native-manifest-error-and-repaired-retry",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "name": "production-reference",
+      "artifact": 11618295671,
+      "archive_sha256": "fb44c29f90487844145a0c94296387fcc30a2d27d83b2d10e92c68406f40f9e5",
+      "archive_digest_verified": true,
+      "run": 37934434822,
+      "url": "https://github.com/myagentfleet/connect/actions/runs/37934434822",
+      "source": "2d3bca154c33b09416f9826fad113863adb25946",
+      "scope": "Stock Safari, plain video outside Connect. Complete and gap blocks each run synthetic/public/public/synthetic. All eight start; all four gap targets miss, including both public-production cases. Public clips have no audio.",
+      "report_sha256": "71f419caabf451754f32ed338d6fc8d78b41d453ee867361cb0c3b8f7c8492f7",
+      "case_filter": null,
+      "recorded_cases": [
+        {
+          "name": "native-complete-original-synthetic-A1-target-125",
+          "status": null
+        },
+        {
+          "name": "native-complete-public-production-B1-target-125",
+          "status": null
+        },
+        {
+          "name": "native-complete-public-production-B2-target-125",
+          "status": null
+        },
+        {
+          "name": "native-complete-original-synthetic-A2-target-125",
+          "status": null
+        },
+        {
+          "name": "native-missing-middle-original-synthetic-A1-target-125",
+          "status": null
+        },
+        {
+          "name": "native-missing-middle-public-production-B1-target-125",
+          "status": null
+        },
+        {
+          "name": "native-missing-middle-public-production-B2-target-125",
+          "status": null
+        },
+        {
+          "name": "native-missing-middle-original-synthetic-A2-target-125",
+          "status": null
+        }
+      ]
+    },
+    {
+      "name": "safari-reference",
+      "artifact": 11616926951,
+      "archive_sha256": "592613f354bbf1a154adcf8f7b06c5753d40d925aaa2146eddb2b4924666f228",
+      "archive_digest_verified": true,
+      "run": 37932181369,
+      "url": "https://github.com/myagentfleet/connect/actions/runs/37932181369",
+      "source": "8276cd68b3ac31da150fc8b4566fb29e479e2f65",
+      "scope": "Stock Safari: four original plus four packet-preserved video-only MSE sessions pass their probes; one of four native controls has the gap failure. Fresh sessions, not fresh Safari processes.",
+      "report_sha256": "8fcd6d9f78abcf232c96f5d32dc5ec7cf8780e945ff66fca76f551210fecb3ca",
+      "case_filter": null,
+      "recorded_cases": [
+        {
+          "name": "mse-block-1-original-A1-target-75",
+          "status": null
+        },
+        {
+          "name": "mse-block-1-video-only-B1-target-75",
+          "status": null
+        },
+        {
+          "name": "mse-block-1-video-only-B2-target-75",
+          "status": null
+        },
+        {
+          "name": "mse-block-1-original-A2-target-75",
+          "status": null
+        },
+        {
+          "name": "mse-block-2-original-A1-target-75",
+          "status": null
+        },
+        {
+          "name": "mse-block-2-video-only-B1-target-75",
+          "status": null
+        },
+        {
+          "name": "mse-block-2-video-only-B2-target-75",
+          "status": null
+        },
+        {
+          "name": "mse-block-2-original-A2-target-75",
+          "status": null
+        },
+        {
+          "name": "native-complete-target-75",
+          "status": null
+        },
+        {
+          "name": "native-complete-target-125",
+          "status": null
+        },
+        {
+          "name": "native-missing-middle-target-125",
+          "status": null
+        },
+        {
+          "name": "native-repaired-middle-target-75",
+          "status": null
+        }
+      ]
+    },
+    {
+      "name": "upstream",
+      "artifact": 11598800977,
+      "archive_sha256": "b3d98e7d8bccefa08580fdde240cbdd9e3d9bb18e47e78e7b6e086805575da79",
+      "archive_digest_verified": true,
+      "run": 37891933708,
+      "url": "https://github.com/myagentfleet/connect/actions/runs/37891933708",
+      "source": "109edb39ffa7a4ad3c38788ca2f39a286538ff07",
+      "scope": "Earlier headed Chrome design captures of the same synthetic media, paused at 45s.",
+      "report_sha256": "02632496ef0fbd526bd885f34c93e14464656ee32ff4eff845376273e38aa16d",
+      "case_filter": null,
+      "recorded_cases": [
+        {
+          "name": "comparison-healthy-player",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "screenshots": {
+    "upstream/comparison-video-320.png": {
+      "sha256": "1d5af1c23714e9fa79306b6f71b42135fe0a3846d364f422b0a6b2a8aab64783",
+      "bytes": 43426,
+      "dimensions": [
+        347,
+        844
+      ],
+      "source": "109edb39ffa7a4ad3c38788ca2f39a286538ff07"
+    },
+    "final-chrome/comparison-video-320.png": {
+      "sha256": "202274785b8a763a2035075f8e149b9debd6c31e25547df2e6c0cd647b13fe04",
+      "bytes": 45285,
+      "dimensions": [
+        305,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "upstream/comparison-video-390.png": {
+      "sha256": "e6573a5468d99de487ba008568ed9df891d4a375bb46905115796375c81ee053",
+      "bytes": 45564,
+      "dimensions": [
+        375,
+        844
+      ],
+      "source": "109edb39ffa7a4ad3c38788ca2f39a286538ff07"
+    },
+    "final-chrome/comparison-video-390.png": {
+      "sha256": "fa6a996959cef163f76a2b2cd6291726221e155a8a6890eefc6138340f74bddb",
+      "bytes": 51549,
+      "dimensions": [
+        375,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "upstream/comparison-video-1280.png": {
+      "sha256": "f56dc455434961748a90b99507a9fee249c895092bf7df8c8092d836020f5707",
+      "bytes": 119819,
+      "dimensions": [
+        1265,
+        974
+      ],
+      "source": "109edb39ffa7a4ad3c38788ca2f39a286538ff07"
+    },
+    "final-chrome/comparison-video-1280.png": {
+      "sha256": "b496eb6150e3bb19c47658ef292cfd00b1cabe18e3219926472e67d91c7c66df",
+      "bytes": 105625,
+      "dimensions": [
+        1265,
+        801
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "upstream/comparison-video-1600.png": {
+      "sha256": "4f37a31d11e588045cd50c1a8f3ef77a605de4b8b8ae7f66afb4f2dca0f6eb36",
+      "bytes": 101771,
+      "dimensions": [
+        1585,
+        849
+      ],
+      "source": "109edb39ffa7a4ad3c38788ca2f39a286538ff07"
+    },
+    "final-chrome/comparison-video-1600.png": {
+      "sha256": "d33667a13a49c624eba67011c336696129e1f825e96605e62219986326b312bc",
+      "bytes": 105224,
+      "dimensions": [
+        1585,
+        801
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/files-menu-390.png": {
+      "sha256": "5bf5beda43f2a1369ce0cdd4e32fde0d4bf4bebe80c7f74bdca48df3ca23b17d",
+      "bytes": 43224,
+      "dimensions": [
+        390,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/keyboard-focus-390.png": {
+      "sha256": "1c493e777a7412caebd2653d6a0681653059f9075e537eeb46cb7b89048c35bf",
+      "bytes": 50340,
+      "dimensions": [
+        375,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/map-1280.png": {
+      "sha256": "0666d27e4058cd93fb4a7c685ddd6a6c85402cb234ead572f08b54358bb279ef",
+      "bytes": 66066,
+      "dimensions": [
+        1280,
+        801
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/map-1600.png": {
+      "sha256": "406a7683b6751a4079d963057ab27c202022ad10e23221d6942eadebb0bb6d87",
+      "bytes": 102172,
+      "dimensions": [
+        1600,
+        801
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/map-320.png": {
+      "sha256": "3a26fabdb1474f4d3dfc825e8b2cc8ab2a21f68310ff57f16c77988a3a826c69",
+      "bytes": 34715,
+      "dimensions": [
+        320,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/map-390.png": {
+      "sha256": "8821aaa74e60912837bcd3157fa1e2240714e5f2070791f886bb0d3482e469ea",
+      "bytes": 36430,
+      "dimensions": [
+        390,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/primary-control-hover-390.png": {
+      "sha256": "1aa4cd1ad4014ca49e701f81641c0e6c3b747ac19db4176b73bf0f525845bd76",
+      "bytes": 49083,
+      "dimensions": [
+        390,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/route-info-menu-390.png": {
+      "sha256": "7dc3924971fdf7f7701970dca4aa0c87cc071c858f6034e5440c6f7535d8687a",
+      "bytes": 51330,
+      "dimensions": [
+        390,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/speed-menu-keyboard-390.png": {
+      "sha256": "4e5fb3859098d49a8a404a9ff714af73afe3100f1fd7f09b0af6310d4259f0c7",
+      "bytes": 44506,
+      "dimensions": [
+        390,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/timeline-hover-1280.png": {
+      "sha256": "1e2ac716637e9a74d16d4c3f2b7d6185567a3afa2a4e1ca43a31ca3ed7d9f565",
+      "bytes": 103153,
+      "dimensions": [
+        1280,
+        800
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/timeline-hover-1600.png": {
+      "sha256": "615eac0bc0fecd9afed24218120e8f0b73d054e266a07814a3d1a64859810647",
+      "bytes": 102006,
+      "dimensions": [
+        1600,
+        800
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/timeline-hover-320.png": {
+      "sha256": "b21856009362e5532541a311784e34c996fe141e8c0475c7bdd441fbfbaeb2c8",
+      "bytes": 42024,
+      "dimensions": [
+        320,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/timeline-hover-390.png": {
+      "sha256": "aaee0f78d2b616c42856bed9989298bb61ba248ea01785daa2347b4e6b482134",
+      "bytes": 49339,
+      "dimensions": [
+        390,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/video-1280.png": {
+      "sha256": "3338eeca1dec08b16555496521045f61906c6451835cf7c402f1fd566c3226f8",
+      "bytes": 103419,
+      "dimensions": [
+        1265,
+        801
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/video-1600.png": {
+      "sha256": "8f20a9bc3660d8940d0b28a5b854af8865d777c028dc977a52c8b531921852d7",
+      "bytes": 101954,
+      "dimensions": [
+        1585,
+        801
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/video-320.png": {
+      "sha256": "1499cb707418e2f7e94b98798d01eb4b6d71ff3d7f1ae3ec3b7a080a4f8d56f5",
+      "bytes": 43269,
+      "dimensions": [
+        305,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/video-390.png": {
+      "sha256": "ec3141c686880ed57c948c907dd2ce26fc1095f0a5178a3ab8796978281e9326",
+      "bytes": 49717,
+      "dimensions": [
+        375,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-chrome/video-hover-390.png": {
+      "sha256": "13978e5429a37a47cb07100873d78a239ed078a55e8b7b536d363a621db37143",
+      "bytes": 49118,
+      "dimensions": [
+        390,
+        844
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-native/native-missed-seek-error-small-320.png": {
+      "sha256": "15d799e87e9e84df66b02cf1fdddf0af00688034038e59c49805f5a0a1a176b1",
+      "bytes": 237088,
+      "dimensions": [
+        960,
+        2340
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-native/native-missed-seek-map-390.png": {
+      "sha256": "92c1de4f7e1c4c02802ff26bf891ca109065e68376609ae1138f260ac0f688ef",
+      "bytes": 221425,
+      "dimensions": [
+        1170,
+        2532
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-native/native-missed-seek-retry-error-390.png": {
+      "sha256": "b1ec78db2351170aa41e763df44b3ee6085b6ccea90207999e0f22c520809c60",
+      "bytes": 245879,
+      "dimensions": [
+        1170,
+        1992
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-native/native-missed-seek-retry-recovered-390.png": {
+      "sha256": "5baafb4ac60cacb23e61c7d7aeb3cce7ac077a824aafdb404b3665034025dccb",
+      "bytes": 325602,
+      "dimensions": [
+        1170,
+        2532
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-native/native-missed-seek-retry-resumed-390.png": {
+      "sha256": "266a2c91f3a635664ce292960c5fce4cb2430119ad872d9c15066c20e214d762",
+      "bytes": 326756,
+      "dimensions": [
+        1170,
+        2532
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-native/native-missed-seek-return-video-390.png": {
+      "sha256": "5f9c49026cb110c71b32e0d04b0c7a11539fa285605a315a21516a5b38e2ce33",
+      "bytes": 275667,
+      "dimensions": [
+        1170,
+        2532
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-native/native-missed-seek-seek-error-390.png": {
+      "sha256": "f44081d8615aca32f08a894efafbbc70c84bfaa562df494ec0428752f291c5c9",
+      "bytes": 244705,
+      "dimensions": [
+        1170,
+        1992
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-native/native-missed-seek-seek-recovered-390.png": {
+      "sha256": "6d9512cf0530801b3e11d09899a7eb9be362b64a5e60a74730592b068c05a517",
+      "bytes": 306108,
+      "dimensions": [
+        1170,
+        1992
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    },
+    "final-native/native-missed-seek-seek-resumed-390.png": {
+      "sha256": "4b950a6a682dde949eea785db34326b36d95958e31497a20db061f2c243b1f01",
+      "bytes": 302361,
+      "dimensions": [
+        1170,
+        1992
+      ],
+      "source": "fd173c1c153e1f893494963675472ad4e448a7ce"
+    }
+  },
+  "native_frame_review": [
+    {
+      "case": "native-missed-seek-retry",
+      "phase": "Recovered paused",
+      "clock": 124.9090919,
+      "burned_timestamp": 124.8,
+      "difference": 0.1090919000000099
+    },
+    {
+      "case": "native-missed-seek-retry",
+      "phase": "After resumed playback",
+      "clock": 126.92727119200003,
+      "burned_timestamp": 126.8,
+      "difference": 0.12727119200003756
+    },
+    {
+      "case": "native-missed-seek-seek",
+      "phase": "Recovered paused",
+      "clock": 9.8181828,
+      "burned_timestamp": 9.8,
+      "difference": 0.018182799999999943
+    },
+    {
+      "case": "native-missed-seek-seek",
+      "phase": "After resumed playback",
+      "clock": 11.819739758666639,
+      "burned_timestamp": 11.8,
+      "difference": 0.019739758666638352
+    }
+  ],
+  "desktop_primary_hover": {
+    "before": {
+      "hovered": true,
+      "hoverCapable": true,
+      "background": "rgb(229, 233, 236)",
+      "color": "rgb(12, 14, 15)"
+    },
+    "after": {
+      "hovered": true,
+      "hoverCapable": true,
+      "background": "rgb(229, 233, 236)",
+      "color": "rgb(12, 14, 15)"
+    }
+  },
+  "native_primary_after_pause": {
+    "native-missed-seek-retry": {
+      "beforeWait": {
+        "hoverNone": true,
+        "hovered": true,
+        "active": false,
+        "background": "rgb(255, 255, 255)",
+        "color": "rgb(12, 14, 15)",
+        "opacity": "1",
+        "rect": {
+          "x": 152,
+          "y": 582.15625,
+          "width": 44,
+          "height": 44,
+          "top": 582.15625,
+          "right": 196,
+          "bottom": 626.15625,
+          "left": 152
+        }
+      },
+      "beforeScreenshot": {
+        "hoverNone": true,
+        "hovered": true,
+        "active": false,
+        "background": "rgb(255, 255, 255)",
+        "color": "rgb(12, 14, 15)",
+        "opacity": "1",
+        "rect": {
+          "x": 152,
+          "y": 582.15625,
+          "width": 44,
+          "height": 44,
+          "top": 582.15625,
+          "right": 196,
+          "bottom": 626.15625,
+          "left": 152
+        }
+      },
+      "afterScreenshot": {
+        "hoverNone": true,
+        "hovered": true,
+        "active": false,
+        "background": "rgb(255, 255, 255)",
+        "color": "rgb(12, 14, 15)",
+        "opacity": "1",
+        "rect": {
+          "x": 152,
+          "y": 582.15625,
+          "width": 44,
+          "height": 44,
+          "top": 582.15625,
+          "right": 196,
+          "bottom": 626.15625,
+          "left": 152
+        }
+      }
+    },
+    "native-missed-seek-seek": {
+      "beforeWait": {
+        "hoverNone": true,
+        "hovered": true,
+        "active": false,
+        "background": "rgb(255, 255, 255)",
+        "color": "rgb(12, 14, 15)",
+        "opacity": "1",
+        "rect": {
+          "x": 152,
+          "y": 582.15625,
+          "width": 44,
+          "height": 44,
+          "top": 582.15625,
+          "right": 196,
+          "bottom": 626.15625,
+          "left": 152
+        }
+      },
+      "beforeScreenshot": {
+        "hoverNone": true,
+        "hovered": true,
+        "active": false,
+        "background": "rgb(255, 255, 255)",
+        "color": "rgb(12, 14, 15)",
+        "opacity": "1",
+        "rect": {
+          "x": 152,
+          "y": 582.15625,
+          "width": 44,
+          "height": 44,
+          "top": 582.15625,
+          "right": 196,
+          "bottom": 626.15625,
+          "left": 152
+        }
+      },
+      "afterScreenshot": {
+        "hoverNone": true,
+        "hovered": true,
+        "active": false,
+        "background": "rgb(255, 255, 255)",
+        "color": "rgb(12, 14, 15)",
+        "opacity": "1",
+        "rect": {
+          "x": 152,
+          "y": 582.15625,
+          "width": 44,
+          "height": 44,
+          "top": 582.15625,
+          "right": 196,
+          "bottom": 626.15625,
+          "left": 152
+        }
+      }
+    }
+  },
+  "visual_review": "The retained findings were completed before the workspace reset: seven current desktop images and all nine native images independently inspected. Restored original archives match their digests; this packaging does not perform a new browser run or new visual inspection.",
+  "limitations": [
+    "Meet the literal complete-diff net-red requirement through an honest maintainable implementation and contribution scope.",
+    "Obtain physical iOS and Android browser acceptance evidence.",
+    "Obtain installed iOS and Android PWA lifecycle/playback evidence.",
+    "Verify the reported iOS audio glitch end-to-end, including audible output and synchronization.",
+    "Give the intermittent desktop WebKit/MSE startup observation a bounded, evidence-supported disposition."
+  ],
+  "evidence_hashes": {
+    "final-chrome/report.json": "ca25d2b81a4a60ffe3d31f1d29bbf5b65d701be17b59939655226af0e90320a3",
+    "final-chrome/source-sha.txt": "1ad347aa0f0cedb8efe21d3245d72ea6948cfa0d89035a0a1dd36cfe17e08bad",
+    "final-native/report.json": "008baa958db9c76aa7238bbf97d46bf937c4451cd3410946eceee2911d6d05f8",
+    "final-native/source-sha.txt": "1ad347aa0f0cedb8efe21d3245d72ea6948cfa0d89035a0a1dd36cfe17e08bad",
+    "full-chrome/report.json": "6c1c2f176eb6e99df53ffa474e48ef133c8d48ee59ca4e773c92ab304ee86654",
+    "full-chrome/source-sha.txt": "97d0b9a32be0d3b5071ebc0851eef0e7d2d7e5befbbdb1b041e15a63988a1fb2",
+    "full-native/report.json": "31819204d774ec0187624041eac2a97e7dd26cf380f5f8f6e653df8911c6dbce",
+    "full-native/source-sha.txt": "97d0b9a32be0d3b5071ebc0851eef0e7d2d7e5befbbdb1b041e15a63988a1fb2",
+    "production-reference/report.json": "71f419caabf451754f32ed338d6fc8d78b41d453ee867361cb0c3b8f7c8492f7",
+    "production-reference/source-sha.txt": "b38590b06b77414217bd4b757b8ffd9cdd1df7c5cd7d38e88843b4e05f16eb51",
+    "safari-reference/report.json": "8fcd6d9f78abcf232c96f5d32dc5ec7cf8780e945ff66fca76f551210fecb3ca",
+    "safari-reference/source-sha.txt": "5fa60d1584fad74378e2a627f92a8001676a236be738c449b04c25f2110494ac",
+    "upstream/report.json": "02632496ef0fbd526bd885f34c93e14464656ee32ff4eff845376273e38aa16d",
+    "upstream/source-sha.txt": "ff88a0d0cc997c977dad9ee20c5c224bcc524638716524ed50719862f5ccb451",
+    "final-chrome/test.log": "30ab246702783a961728af35ad111c3cc58d07671e83c62d6da3512a2fb5687b",
+    "final-chrome/lint.log": "bb142702f4a07be84c7b01253b4198a7648d69930dc66c882ec56173580e71ee",
+    "final-chrome/browser.log": "9b52b5f5500263eec2b0d4497b7e7a9e1e188aaae0a9bd72d40bff01d539cea2"
+  }
+}
