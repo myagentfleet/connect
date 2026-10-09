@@ -50,6 +50,7 @@ export function openStream(video, url, { onError, onWaiting, onAudio, startPosit
     onError(error);
   }
   return {
+    get native() { return native; },
     seek,
     destroy() {
       if (destroyed) return;

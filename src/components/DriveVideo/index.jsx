@@ -8,12 +8,15 @@ import { VideoStatus, pause, play, resetPlayback, setHasAudio, setPlaybackSpeed,
 import { openStream } from './stream';
 
 const NO_VIDEO = 'No video is available in this selection.';
+const SEEK_UNAVAILABLE = 'Unable to play video at the selected time. Try another point on the timeline or retry.';
+const SEEK_TOLERANCE = 0.5;
 
 class RouteVideo extends Component {
   video = React.createRef();
   state = { error: null };
   sourceId = 0;
   playAttempt = 0;
+  pendingTarget = null;
 
   componentDidMount() {
     this.mounted = true;
@@ -39,6 +42,7 @@ class RouteVideo extends Component {
     this.mounted = false;
     this.sourceId += 1;
     this.playAttempt += 1;
+    this.pendingTarget = null;
     cancelAnimationFrame(this.frameId);
     this.video.current.audioTracks?.removeEventListener?.('addtrack', this.detectAudio);
     this.stream?.destroy();
@@ -51,6 +55,7 @@ class RouteVideo extends Component {
     this.playPending = false;
     this.loading = true;
     this.pendingSeek = true;
+    this.pendingTarget = null;
     this.failed = false;
     this.streamError = null;
     this.ready = false;
@@ -60,8 +65,10 @@ class RouteVideo extends Component {
     const { currentRoute } = this.props;
     const url = api.video.getQcameraStreamUrl(currentRoute.fullname, currentRoute.share_exp, currentRoute.share_sig);
     const active = () => this.mounted && this.sourceId === sourceId;
+    const startPosition = this.seekPosition(offset);
+    this.pendingTarget = { sourceId, time: startPosition };
     this.stream = openStream(this.video.current, url, {
-      startPosition: this.seekPosition(offset),
+      startPosition,
       onError: (error) => { if (active()) this.onStreamError(error); },
       onWaiting: () => { if (active()) this.onWaiting(); },
       onAudio: () => { if (active()) this.props.dispatch(setHasAudio(true)); },
@@ -100,8 +107,11 @@ class RouteVideo extends Component {
       this.loadSource();
       return;
     }
+    const target = this.seekPosition(offset);
+    this.pendingTarget = { sourceId: this.sourceId, time: target };
     if (!this.ready) {
-      this.stream?.seek(this.seekPosition(offset));
+      this.pendingSeek = true;
+      this.stream?.seek(target);
       return;
     }
     const [start, end] = this.range();
@@ -111,14 +121,18 @@ class RouteVideo extends Component {
       return;
     }
     const video = this.video.current;
-    const target = this.seekPosition(offset);
-    this.pendingSeek = video.currentTime !== target;
-    if (this.pendingSeek) video.currentTime = target;
+    const changed = video.currentTime !== target;
+    // An equal getter can still describe an unfinished native seek.
+    this.pendingSeek = changed || video.seeking;
+    if (changed) video.currentTime = target;
     if (this.streamError && !this.isBuffered(target)) {
       this.streamError = null;
       this.stream.seek(target);
     }
-    if (!this.pendingSeek) this.updateOffset();
+    if (!this.pendingSeek) {
+      if (video.readyState >= 2) this.pendingTarget = null;
+      this.updateOffset();
+    }
   }
 
   async applyPlayback() {
@@ -159,6 +173,8 @@ class RouteVideo extends Component {
 
   onPlayable = () => {
     if (!this.mounted || this.failed) return;
+    const video = this.video.current;
+    if (!this.pendingSeek && !video.seeking && video.readyState >= 2) this.pendingTarget = null;
     this.loading = false;
     this.setStatus(VideoStatus.READY);
     this.detectAudio();
@@ -182,9 +198,26 @@ class RouteVideo extends Component {
   };
 
   onSeeked = () => {
-    if (!this.mounted) return;
+    if (!this.mounted || !this.ready || this.failed) return;
+    const video = this.video.current;
+    if (video.seeking) return;
+    const target = this.pendingTarget;
+    // A seeked event can report a browser-clamped position. Require positive
+    // range evidence; empty ranges and completions without current data keep
+    // the existing behavior rather than leaving playback pending indefinitely.
+    if (this.stream?.native && target?.sourceId === this.sourceId && Number.isFinite(target.time)
+      && video.readyState >= 2 && Math.abs(video.currentTime - target.time) > SEEK_TOLERANCE) {
+      const seekable = video.seekable;
+      const includesTarget = Array.from({ length: seekable.length }, (_, index) =>
+        target.time >= seekable.start(index) - SEEK_TOLERANCE && target.time <= seekable.end(index) + SEEK_TOLERANCE).some(Boolean);
+      if (seekable.length && !includesTarget) {
+        this.onError({ message: SEEK_UNAVAILABLE });
+        return;
+      }
+    }
+    this.pendingTarget = null;
     this.pendingSeek = false;
-    if (this.video.current.readyState >= 2) this.onPlayable();
+    if (video.readyState >= 2) this.onPlayable();
     this.updateOffset();
   };
 
@@ -207,7 +240,7 @@ class RouteVideo extends Component {
   };
 
   onEnded = () => {
-    if (!this.mounted) return;
+    if (!this.mounted || this.failed) return;
     if (this.props.isPlaying && this.props.loop?.duration > 0) {
       this.seekTo(this.range()[0]);
       this.applyPlayback();
@@ -267,9 +300,11 @@ class RouteVideo extends Component {
     }
     this.failed = true;
     this.pendingSeek = false;
+    this.pendingTarget = null;
     this.setStatus(VideoStatus.FAILED);
     this.video.current.pause();
-    this.setState({ error: error?.message === NO_VIDEO ? NO_VIDEO
+    const message = error?.message;
+    this.setState({ error: message === NO_VIDEO || message === SEEK_UNAVAILABLE ? message
       : error?.response?.code === 404 ? 'This video segment has not uploaded yet or has been deleted.'
         : 'Unable to load video. Check your connection or try another segment.' });
   };

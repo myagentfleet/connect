@@ -36,6 +36,8 @@ const route = { fullname: 'drive', duration: 60000, videoStartOffset: 2000 };
 const media = (video, values) => Object.defineProperties(video, Object.fromEntries(
   Object.entries(values).map(([key, value]) => [key, { configurable: true, writable: true, value }]),
 ));
+const timeRanges = (ranges) => ({ length: ranges.length, start: (index) => ranges[index][0], end: (index) => ranges[index][1] });
+const seekRoute = { ...route, duration: 180000 };
 
 beforeEach(() => {
   mocks.streams.length = 0;
@@ -73,6 +75,11 @@ function ready(video, duration = 58) {
   media(video, { duration, readyState: 4, seeking: false });
   fireEvent.loadedMetadata(video);
   fireEvent.canPlay(video);
+}
+
+function finishSeek(video, currentTime, ranges, readyState = 4) {
+  media(video, { currentTime, seeking: false, readyState, seekable: timeRanges(ranges) });
+  fireEvent.seeked(video);
 }
 
 async function finishImport() {
@@ -506,4 +513,181 @@ test('a seek beyond buffered video restarts a stopped HLS loader at the requeste
   expect(store.getState().videoStatus).toBe('loading');
   fireEvent.canPlay(video);
   expect(store.getState().videoStatus).toBe('ready');
+});
+
+test.each(['native', 'native fallback'])('reports a %s seek clamped outside the available range without losing the requested position', async (transport) => {
+  if (transport === 'native fallback') {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Chrome/154.0.0.0');
+    Hls.isSupported.mockReturnValue(false);
+  }
+  const { video, store, getByText, getByRole } = mountVideo({ currentRoute: seekRoute });
+  await finishImport();
+  ready(video, 178);
+  const loads = video.load.mock.calls.length;
+  const plays = video.play.mock.calls.length;
+  act(() => store.dispatch(seek(127000)));
+  expect(video.currentTime).toBe(125);
+  fireEvent.seeking(video);
+  finishSeek(video, 60, [[0, 60]]);
+  expect(video.error).toBeNull();
+  expect(getByText('Unable to play video at the selected time. Try another point on the timeline or retry.')).toBeVisible();
+  expect(getByRole('button', { name: 'Retry' })).toBeEnabled();
+  expect(store.getState()).toMatchObject({ offset: 127000, isPlaying: true, videoStatus: 'failed' });
+  expect(video.paused).toBe(true);
+  const failedState = store.getState();
+  fireEvent.waiting(video);
+  fireEvent.canPlay(video);
+  fireEvent.playing(video);
+  fireEvent.timeUpdate(video);
+  fireEvent.seeked(video);
+  fireEvent.ended(video);
+  expect(store.getState()).toEqual(failedState);
+  expect(video.load).toHaveBeenCalledTimes(loads);
+  expect(video.play).toHaveBeenCalledTimes(plays);
+  expect(mocks.streams).toHaveLength(0);
+});
+
+test('a late ended event cannot restart a selected loop after a native seek fails', () => {
+  const { video, store } = mountVideo({ currentRoute: seekRoute, loop: { startTime: 20000, duration: 140000 } });
+  ready(video, 178);
+  act(() => store.dispatch(seek(127000)));
+  finishSeek(video, 60, [[0, 60]]);
+  const failedState = store.getState();
+  expect(failedState).toMatchObject({ offset: 127000, isPlaying: true, videoStatus: 'failed' });
+  const loads = video.load.mock.calls.length;
+  const plays = video.play.mock.calls.length;
+  fireEvent.ended(video);
+  expect(store.getState()).toEqual(failedState);
+  expect(video.load).toHaveBeenCalledTimes(loads);
+  expect(video.play).toHaveBeenCalledTimes(plays);
+});
+
+test('accepts native startup at the first available segment and still reports a later requested unavailable seek', () => {
+  HTMLMediaElement.prototype.play.mockImplementation(function () {
+    media(this, { paused: false });
+    return Promise.resolve();
+  });
+  const { video, store, queryByRole, getByRole } = mountVideo({ currentRoute: seekRoute });
+  media(video, { duration: 178, readyState: 1, seeking: false, currentTime: 0, seekable: timeRanges([[60, 178]]) });
+  fireEvent.loadedMetadata(video);
+  fireEvent.waiting(video);
+  media(video, { currentTime: 60.032, readyState: 4 });
+  fireEvent.playing(video);
+  expect(store.getState()).toMatchObject({ offset: 62032, isPlaying: true, videoStatus: 'ready' });
+  finishSeek(video, 60.032, [[60, 178]]);
+  expect(queryByRole('button', { name: 'Retry' })).toBeNull();
+  act(() => store.dispatch(seek(2000)));
+  finishSeek(video, 60, [[60, 178]]);
+  expect(store.getState()).toMatchObject({ offset: 2000, isPlaying: true, videoStatus: 'failed' });
+  expect(getByRole('button', { name: 'Retry' })).toBeVisible();
+});
+
+test.each([
+  ['retry', false], ['retry', true], ['seek', false], ['seek', true],
+])('recovers from a clamped native seek through %s while preserving playback intent %s', (recovery, isPlaying) => {
+  const { video, store, getByRole, queryByRole } = mountVideo({ currentRoute: seekRoute });
+  ready(video, 178);
+  if (!isPlaying) act(() => store.dispatch(pause()));
+  act(() => store.dispatch(seek(127000)));
+  finishSeek(video, 60, [[0, 60]]);
+  expect(store.getState()).toMatchObject({ offset: 127000, isPlaying, videoStatus: 'failed' });
+  const loads = video.load.mock.calls.length;
+  const plays = video.play.mock.calls.length;
+  const offset = recovery === 'retry' ? 127000 : 12000;
+  const target = (offset - route.videoStartOffset) / 1000;
+  media(video, { seekable: timeRanges([[0, 178]]) });
+  if (recovery === 'retry') fireEvent.click(getByRole('button', { name: 'Retry' }));
+  else act(() => store.dispatch(seek(offset)));
+  expect(video.load.mock.calls.length).toBeGreaterThan(loads);
+  expect(video.currentTime).toBe(target);
+  expect(store.getState()).toMatchObject({ offset, isPlaying, videoStatus: 'loading' });
+  ready(video, 178);
+  finishSeek(video, target, [[0, 178]]);
+  expect(store.getState()).toMatchObject({ offset, isPlaying, videoStatus: 'ready' });
+  expect(video.paused).toBe(!isPlaying);
+  expect(video.play).toHaveBeenCalledTimes(plays + Number(isPlaying));
+  expect(queryByRole('button', { name: 'Retry' })).toBeNull();
+});
+
+test.each([
+  ['seekable is empty', 125, 60, []],
+  ['the media time is within half a second', 125, 124.5, [[0, 60]]],
+  ['the target is at the upper range tolerance', 60.5, 59, [[0, 60]]],
+  ['the target is at the lower range tolerance', 119.5, 121, [[120, 178]]],
+  ['the target is in a later seekable range', 125, 120, [[0, 60], [120, 178]]],
+])('does not declare a native seek unavailable when %s', (_reason, target, actual, ranges) => {
+  const { video, store, queryByRole } = mountVideo({ currentRoute: seekRoute });
+  ready(video, 178);
+  act(() => store.dispatch(pause()));
+  const loads = video.load.mock.calls.length;
+  media(video, { buffered: timeRanges([[0, 60]]) });
+  act(() => store.dispatch(seek(target * 1000 + route.videoStartOffset)));
+  fireEvent.seeking(video);
+  finishSeek(video, actual, ranges);
+  expect(store.getState()).toMatchObject({ offset: actual * 1000 + route.videoStartOffset, isPlaying: false, videoStatus: 'ready' });
+  expect(queryByRole('button', { name: 'Retry' })).toBeNull();
+  expect(video.paused).toBe(true);
+  expect(video.load).toHaveBeenCalledTimes(loads);
+});
+
+test('retains the latest pre-metadata target when the media clock equals it but the seek has not settled', () => {
+  const { video, store, getByRole } = mountVideo({ currentRoute: seekRoute });
+  act(() => { store.dispatch(seek(27000)); store.dispatch(seek(127000)); store.dispatch(pause()); });
+  expect(video.currentTime).toBe(125);
+  media(video, { duration: 178, readyState: 4, seeking: true });
+  fireEvent.loadedMetadata(video);
+  fireEvent.canPlay(video);
+  fireEvent.seeked(video);
+  finishSeek(video, 60, [[0, 60]]);
+  expect(store.getState()).toMatchObject({ offset: 127000, isPlaying: false, videoStatus: 'failed' });
+  expect(getByRole('button', { name: 'Retry' })).toBeVisible();
+  expect(video.paused).toBe(true);
+  expect(video.play).not.toHaveBeenCalled();
+});
+
+test('a newer app seek supersedes its predecessor and does not constrain later native seeks after completion', () => {
+  const { video, store, queryByRole } = mountVideo({ currentRoute: seekRoute });
+  ready(video, 178);
+  act(() => store.dispatch(pause()));
+  act(() => store.dispatch(seek(127000)));
+  media(video, { seeking: true });
+  fireEvent.seeking(video);
+  act(() => store.dispatch(seek(12000)));
+  finishSeek(video, 10, [[0, 60]]);
+  expect(store.getState()).toMatchObject({ offset: 12000, isPlaying: false, videoStatus: 'ready' });
+  media(video, { seeking: true });
+  fireEvent.seeking(video);
+  finishSeek(video, 60, [[50, 70]]);
+  expect(store.getState()).toMatchObject({ offset: 62000, isPlaying: false, videoStatus: 'ready' });
+  expect(queryByRole('button', { name: 'Retry' })).toBeNull();
+});
+
+test('a low-readiness seek completion does not fail or hold later media progress pending', () => {
+  const { video, store, queryByRole } = mountVideo({ currentRoute: seekRoute });
+  ready(video, 178);
+  act(() => store.dispatch(pause()));
+  act(() => store.dispatch(seek(127000)));
+  fireEvent.seeking(video);
+  finishSeek(video, 60, [[0, 60]], 1);
+  expect(store.getState().videoStatus).not.toBe('failed');
+  media(video, { currentTime: 61, readyState: 4 });
+  fireEvent.canPlay(video);
+  fireEvent.timeUpdate(video);
+  fireEvent.seeked(video);
+  expect(store.getState()).toMatchObject({ offset: 63000, isPlaying: false, videoStatus: 'ready' });
+  expect(queryByRole('button', { name: 'Retry' })).toBeNull();
+});
+
+test('keeps MSE seek handling unchanged even when the browser advertises native HLS', async () => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Chrome/154.0.0.0');
+  const { video, store, queryByRole } = mountVideo({ currentRoute: seekRoute });
+  await finishImport();
+  ready(video, 178);
+  act(() => store.dispatch(pause()));
+  act(() => store.dispatch(seek(127000)));
+  finishSeek(video, 60, [[0, 60]]);
+  expect(store.getState()).toMatchObject({ offset: 62000, isPlaying: false, videoStatus: 'ready' });
+  expect(queryByRole('button', { name: 'Retry' })).toBeNull();
+  expect(mocks.streams).toHaveLength(1);
+  expect(mocks.streams[0].destroy).not.toHaveBeenCalled();
 });
