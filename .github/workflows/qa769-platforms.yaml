@@ -1,5 +1,5 @@
-# Isolated media diagnostics; collection success is not application acceptance.
-name: qa769-stock-safari-reference
+# Native HLS diagnostics with synthetic and explicitly public production media.
+name: qa769-production-native-reference
 
 on:
   push:
@@ -15,9 +15,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     env:
-      QA_CANDIDATE_SHA: 8276cd68b3ac31da150fc8b4566fb29e479e2f65
-      QA769_OUTPUT: ${{ github.workspace }}/results/safari-reference
-      QA769_AUDIO_VARIANT_DIR: ${{ github.workspace }}/results/safari-reference/video-only
+      QA_CANDIDATE_SHA: 2d3bca154c33b09416f9826fad113863adb25946
+      QA769_OUTPUT: ${{ github.workspace }}/results/production-native
     defaults:
       run:
         shell: bash
@@ -40,28 +39,27 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
-      - name: Record source identity and copy diagnostic runner
+      - name: Record source identity and copy diagnostic scripts
         run: |
           test "$(git rev-parse HEAD)" = "$QA_CANDIDATE_SHA"
           mkdir -p "$QA769_OUTPUT"
           git rev-parse HEAD > "$QA769_OUTPUT/source-sha.txt"
-          cp ../harness/scripts/qa769-safari-reference.mjs scripts/qa769-safari-reference.mjs
+          cp ../harness/scripts/qa769-safari-production.mjs scripts/qa769-safari-production.mjs
+          cp ../harness/scripts/qa769-public-qcamera.mjs scripts/qa769-public-qcamera.mjs
       - name: Install frozen application dependencies
         run: bun install --frozen-lockfile 2>&1 | tee "$QA769_OUTPUT/install.log"
-      - name: Install FFmpeg for independently verified media transformation
+      - name: Install FFmpeg for reference-frame decoding
         run: |
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
             brew install ffmpeg
           fi
-      - name: Generate and verify packet-preserving video-only media
-        run: python3 ../harness/scripts/qa769-video-only.py --source public/demo-video --output "$QA769_AUDIO_VARIANT_DIR" 2>&1 | tee "$QA769_OUTPUT/fixture-verification.log"
-      - name: Collect stock Safari with the pre-enabled system driver
-        run: node scripts/qa769-safari-reference.mjs 2>&1 | tee "$QA769_OUTPUT/safari-reference.log"
+      - name: Compare native playback using the pre-enabled stock Safari driver
+        run: node scripts/qa769-safari-production.mjs 2>&1 | tee "$QA769_OUTPUT/production-native.log"
       - name: Upload every diagnostic outcome
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa769-stock-safari-${{ github.run_id }}
-          path: results/safari-reference
+          name: qa769-production-native-${{ github.run_id }}
+          path: results/production-native
           if-no-files-found: warn
           retention-days: 7

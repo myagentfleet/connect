@@ -1,17 +1,17 @@
 /*
- * Diagnostic stock-Safari reference, not an application acceptance test.
- * Run from the pinned application checkout on a GitHub-hosted macOS runner:
- *   QA_CANDIDATE_SHA=8276cd68b3ac31da150fc8b4566fb29e479e2f65
- *   QA769_AUDIO_VARIANT_DIR=/verified/video-only
- *   QA769_OUTPUT=/results/safari-reference
- *   node scripts/qa769-safari-reference.mjs
- * Requires the image's already-enabled /usr/bin/safaridriver. This script does
- * not enable automation, change preferences, attach to personal profiles, or
- * kill processes. It closes each owned WebDriver session; the ephemeral job
- * owns final cleanup of the unreferenced, file-logged driver service.
+ * Diagnostic stock-Safari comparison of pinned synthetic and public qcamera
+ * media. Run only in an ephemeral, pre-enabled GitHub-hosted macOS job:
+ *   QA_CANDIDATE_SHA=2d3bca154c33b09416f9826fad113863adb25946
+ *   QA769_OUTPUT=/results/safari-production
+ *   node scripts/qa769-safari-production.mjs
+ * The public helper performs bounded, hash-pinned retrieval only after the
+ * normal driver/image preflight. TS bytes stay in memory. FFmpeg receives
+ * those bytes through stdin and exports independent reference PNGs on stdout.
+ * No Safari preferences, automation settings, or profiles are changed. Every
+ * owned WebDriver session is deleted; the driver is left to normal job cleanup.
  */
 import assert from 'node:assert/strict';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -19,32 +19,30 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { loadPublicQcameraReference } from './qa769-public-qcamera.mjs';
 
-const PINNED_SOURCE = '8276cd68b3ac31da150fc8b4566fb29e479e2f65';
+const PINNED_SOURCE = '2d3bca154c33b09416f9826fad113863adb25946';
+const PUBLIC_HELPER_SHA256 = '8a3a188acf8fdf435ae60683856e3ca474a838abb351f0a31750217b1ca3b875';
 const ORIGINAL_HASHES = {
   'complete.m3u8': '3b9c3967df955376b969409358c35d1840f5728ee66a842d257039c688cd3fda',
   '0/qcamera.ts': 'd2616e37b45e2c0628af3545fa12fcb2db8945cfbf3799f882c97ffe4636c61b',
   '1/qcamera.ts': 'd19d3985238becc0d20b5a7eec47f118ab22df856661844342b9d242ea837f48',
   '2/qcamera.ts': 'e2c74fb5ea4beaaa778d3eae4b0294023b8b01beb28c8a20d1d0187bbb07c3e8',
 };
-const VIDEO_ONLY_HASHES = {
-  '0/qcamera.ts': '6df0e9005d2a356c8dded091297e102c36432704f9c4b83477b2fb7c5355d816',
-  '1/qcamera.ts': 'd36dc5ddcce8534b99411a80093682e061f4bc76c5f00a96d35734b86b07935c',
-  '2/qcamera.ts': 'bdc16743dbd324b762c18bb4bc8c2b0fc7e1d612beb6c70cbedded589852a7fb',
-};
 const execute = promisify(execFile);
-const output = resolve(process.env.QA769_OUTPUT || 'qa769-safari-reference-results');
+const output = resolve(process.env.QA769_OUTPUT || 'qa769-safari-production-results');
 const delay = (ms) => new Promise((accept) => setTimeout(accept, ms));
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const order = ['original-A1', 'video-only-B1', 'video-only-B2', 'original-A2'];
+const order = ['original-synthetic-A1', 'public-production-B1', 'public-production-B2', 'original-synthetic-A2'];
 const report = {
   started: new Date().toISOString(), status: 'preflight', acceptanceRun: false, collectionComplete: false,
-  purpose: 'Observe stock desktop Safari with plain Hls.js and native HLS, using pinned media and no video-frame callbacks.',
-  controls: 'Two predeclared ABBA blocks, then four native cases. Every case gets a fresh WebDriver SESSION and unique local media URLs. The Safari process is not restarted between sessions; fresh processes are not claimed. No emulation, capability spoofing, application code, setup changes, reloads, or playback retries.',
-  oracle: 'Startup/resume requires >=2s without a seek or invalid state, >1.7s clock advancement, and increases in totalVideoFrames minus droppedVideoFrames both from the initial baseline and after a late baseline at >=1.5s. A late interval must span >=400ms and >0.3s of media time. Paused targets retain six clock samples over >=1s before the first screenshot. Screenshots require independent review of the burned timestamp; clock/quality success alone does not establish a correct presented frame.',
+  purpose: 'Compare pinned original synthetic media with unchanged public production qcamera bytes in stock desktop Safari native HLS, without video-frame callbacks.',
+  controls: 'Two availability blocks in order: complete, then missing-middle. Each block uses original-synthetic A1, public-production B1, public-production B2, original-synthetic A2; all seek to 125s through native HLS. Every case gets a fresh WebDriver SESSION and unique local URLs. The Safari process is not restarted between sessions. No emulation, capability spoofing, application code, reloads, or playback retries.',
+  oracle: 'Startup/resume requires >=2s without a seek or invalid state, >1.7s clock advancement, and increases in totalVideoFrames minus droppedVideoFrames both from the initial baseline and after a late baseline at >=1.5s. A late interval must span >=400ms and >0.3s of media time. Paused targets retain six samples over >=1s before the first screenshot. Synthetic screenshots require burned-timestamp review; production screenshots require independent comparison with offline-decoded reference frames. Clock/quality success does not establish a correct presented frame.',
   screenshotOrder: 'No screenshot, canvas read, or video-frame callback occurs before startup and the first paused-target measurements. Resume measurements occur after the paused screenshot, which may affect the renderer path.',
   nativeScope: 'Normal desktop Safari only. This is not physical iOS, iPhone emulation, Playwright WebKit, or an application acceptance claim.',
-  missingMiddlePolicy: 'The pinned complete manifest is unchanged. In the missing-middle case only 1/qcamera.ts returns an actual HTTP 404; segment 2 remains available. The repaired-middle control serves original middle bytes from its first request in a fresh session, with all media available. It does not claim to exercise an application repair action.',
+  missingMiddlePolicy: 'Each variant uses its own complete manifest, unchanged between availability blocks. Only 1/qcamera.ts returns an actual HTTP 404 in missing-middle cases; segment 2 remains available. No GAP or DISCONTINUITY tag is added. The complete block precedes the missing block; no repair action is tested.',
+  fixtureLimits: 'Production media is video only and has no burned timestamp. It changes several encoding properties together and cannot isolate their individual effects or validate audio. The public source is localized to its first three segments without re-encoding or saving TS files.',
   driverLifecycle: 'Start only the pre-enabled system driver on an ephemeral GitHub-hosted runner. Use loopback HTTP; DELETE every owned session. Do not kill the driver process. Its file-backed logs and unref allow Node to exit; normal job cleanup removes the service.',
   references: [
     'https://developer.apple.com/documentation/webkit/testing-with-webdriver-in-safari',
@@ -55,16 +53,10 @@ const report = {
     'https://github.com/WebKit/WebKit/blob/56453fdfe0b0ca6258c23e6453b34f70b885d13f/Source/WebCore/platform/graphics/avfoundation/AudioVideoRendererAVFObjC.mm#L1503-L1537',
     'https://github.com/WebKit/WebKit/blob/56453fdfe0b0ca6258c23e6453b34f70b885d13f/Source/WebCore/platform/graphics/avfoundation/objc/MediaPlayerPrivateAVFoundationObjC.mm#L2761-L2807',
   ],
-  plan: [
-    ...[1, 2].flatMap((block) => order.map((arm) => ({
-      name: `mse-block-${block}-${arm}-target-75`, transport: 'mse', target: 75,
-      variant: arm.startsWith('video-only') ? 'video-only' : 'original', availability: 'complete',
-    }))),
-    { name: 'native-complete-target-75', transport: 'native', target: 75, variant: 'original', availability: 'complete' },
-    { name: 'native-complete-target-125', transport: 'native', target: 125, variant: 'original', availability: 'complete' },
-    { name: 'native-missing-middle-target-125', transport: 'native', target: 125, variant: 'original', availability: 'missing-middle' },
-    { name: 'native-repaired-middle-target-75', transport: 'native', target: 75, variant: 'original', availability: 'repaired-middle' },
-  ],
+  plan: ['complete', 'missing-middle'].flatMap((availability) => order.map((arm) => ({
+    name: `native-${availability}-${arm}-target-125`, transport: 'native', target: 125,
+    variant: arm.startsWith('public-production') ? 'public-production' : 'original-synthetic', availability,
+  }))),
   environment: {
     platform: process.platform, arch: process.arch, node: process.version,
     githubActions: process.env.GITHUB_ACTIONS, runnerEnvironment: process.env.RUNNER_ENVIRONMENT,
@@ -127,29 +119,19 @@ function sustainedProbe() {
 }
 
 function referenceHtml(plan) {
-  const transport = plan.transport === 'mse' ? `
-    if (!Hls.isSupported()) throw new Error('Normal MSE support is required');
-    const hls = new Hls({ autoStartLoad: false, maxBufferLength: 40 });
-    hls.on(Hls.Events.MANIFEST_PARSED, () => hls.startLoad(0));
-    hls.on(Hls.Events.ERROR, (_event, error) => globalThis.qaHlsErrors.push({ at: performance.now(),
-      type: error.type, details: error.details, fatal: error.fatal, reason: error.reason,
-      message: error.error?.message, frag: error.frag && { sn: error.frag.sn, start: error.frag.start, duration: error.frag.duration } }));
-    hls.loadSource('complete.m3u8'); hls.attachMedia(video);
-  ` : "video.src = 'complete.m3u8'; video.load(); video.currentTime = 0;";
   return Buffer.from(`<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1"><title>Playback reference</title>
     <style>body{margin:16px;font:16px sans-serif;color:#ddd;background:#16181a}video{display:block;width:320px;height:200px;max-width:100%;background:black}p{max-width:640px}</style>
     </head><body><h1>Playback reference</h1><p>${plan.name}</p><video controls playsinline muted preload="auto"></video>
-    <p>${plan.variant === 'video-only' ? 'Packet-preserving video-only variant' : 'Original media'}; ${plan.availability}. No Connect application code.</p>
+    <p>${plan.variant === 'public-production' ? 'Pinned public production qcamera; no burned timestamp' : 'Original synthetic media; burned timestamp'}; ${plan.availability}. No Connect application code.</p>
     <script>(${observe.toString()})();</script>
-    ${plan.transport === 'mse' ? '<script src="hls.js"></script>' : ''}
     <script>
       try {
         const video = document.querySelector('video');
         video.addEventListener('loadedmetadata', () => { if (video.currentTime !== 0) video.currentTime = 0;
           video.play().catch(error => globalThis.qaPlayErrors.push({ name: error.name, message: error.message }));
         }, { once: true });
-        ${transport}
+        video.src = 'complete.m3u8'; video.load(); video.currentTime = 0;
         globalThis.qaSetup = 'ready';
       } catch (error) { globalThis.qaSetup = 'failed'; globalThis.qaPageErrors.push({ name: error.name, message: error.message }); }
     </script></body></html>`);
@@ -227,37 +209,84 @@ async function preflight() {
   assert.equal(report.sourceSha, PINNED_SOURCE, 'The exact candidate must be checked out');
   await execute('git', ['diff', '--exit-code', PINNED_SOURCE, '--', '.']);
   report.runnerSha256 = hash(await readFile(fileURLToPath(import.meta.url)));
+  report.publicHelperSha256 = hash(await readFile(new URL('./qa769-public-qcamera.mjs', import.meta.url)));
+  assert.equal(report.publicHelperSha256, PUBLIC_HELPER_SHA256, 'The reviewed public-media helper must be unchanged');
 }
 
 async function loadFixtures() {
-  const hlsPackage = JSON.parse(await readFile('node_modules/hls.js/package.json', 'utf8'));
-  assert.equal(hlsPackage.version, '1.7.3'); report.hlsVersion = hlsPackage.version;
-  const files = new Map([['hls.js', await readFile('node_modules/hls.js/dist/hls.js')]]);
+  const original = new Map();
   for (const [file, expected] of Object.entries(ORIGINAL_HASHES)) {
     const bytes = await readFile(resolve('public/demo-video', file));
-    assert.equal(hash(bytes), expected, `Pinned original fixture ${file}`); files.set(file, bytes);
+    assert.equal(hash(bytes), expected, `Pinned original fixture ${file}`); original.set(file, bytes);
   }
-  report.sha256 = Object.fromEntries([...files].map(([file, bytes]) => [file, hash(bytes)]));
-  assert.ok(process.env.QA769_AUDIO_VARIANT_DIR, 'Generate the independently verified video-only fixture before this diagnostic');
-  const variantDir = resolve(process.env.QA769_AUDIO_VARIANT_DIR);
-  const provenance = JSON.parse(await readFile(resolve(variantDir, 'provenance.json'), 'utf8'));
-  report.audioVariantProvenance = provenance;
-  assert.equal(provenance.diagnostic_only, true); assert.equal(provenance.original_files_unchanged, true);
-  assert.equal(provenance.manifest_unchanged, true); assert.deepEqual(provenance.source_sha256, ORIGINAL_HASHES);
-  assert.equal(hash(await readFile(resolve(variantDir, 'complete.m3u8'))), ORIGINAL_HASHES['complete.m3u8']);
-  const videoOnlyFiles = new Map();
-  for (const [file, expected] of Object.entries(VIDEO_ONLY_HASHES)) {
-    const bytes = await readFile(resolve(variantDir, file));
-    assert.equal(hash(bytes), expected, `Pinned packet-preserving variant ${file}`);
-    assert.equal(provenance.segments[file].sha256, expected);
-    for (const check of ['same_file_size', 'same_video_packets_and_positions', 'same_pcr_packets_and_positions',
-      'all_other_packets_unchanged', 'pmt_crc_valid', 'same_video_pes_data_and_timestamps', 'same_h264_elementary_stream', 'strict_decode_passed']) {
-      assert.equal(provenance.segments[file][check], true, `${file}: ${check}`);
+  const production = await loadPublicQcameraReference();
+  report.publicProductionProvenance = production.provenance;
+  const variants = new Map([['original-synthetic', original], ['public-production', production.files]]);
+  report.fixtureSha256 = Object.fromEntries([...variants].map(([variant, files]) => [variant,
+    Object.fromEntries([...files].map(([file, bytes]) => [file, hash(bytes)])),
+  ]));
+  return variants;
+}
+
+async function exportReferenceFrames(files, provenance) {
+  const folder = 'production-reference-frames';
+  const directory = resolve(output, folder);
+  await mkdir(directory, { recursive: true });
+  const nominalFps = 20;
+  const indices = [[30, 40, 50], [0], [0, 90, 100, 110, 140]];
+  const durations = [0, 1, 2].map((segment) => Number(provenance.segments[`${segment}/qcamera.ts`].duration));
+  assert.ok(durations.every((duration) => Number.isFinite(duration) && duration > 0));
+  const evidence = report.productionReferenceFrames = {
+    status: 'exporting', folder, nominalFps, segmentDurations: durations, frames: [],
+    basis: 'Zero-based decoded frame index within each independently decoded pinned segment. Approximate absolute playlist position is the sum of preceding production EXTINF durations plus frameIndex/20. Original PTS cadence has microsecond variation; these positions are not claimed as measured browser timestamps.',
+    method: 'Unchanged TS buffers go to FFmpeg stdin; select uses decoded frame index. PNG stdout is saved without scaling, frame overlays, video re-encoding, or any TS file. These offline references do not read from or modify the Safari renderer.',
+    review: 'Production screenshot matching remains pending independent visual review. A browser clock value alone does not identify the presented source frame.',
+    ffmpegVersion: (await execute('ffmpeg', ['-version'], { timeout: 10000 })).stdout.trim(),
+    references: ['https://ffmpeg.org/ffmpeg-filters.html#select_002c-aselect', 'https://ffmpeg.org/ffmpeg-protocols.html#pipe'],
+  };
+  let playlistStartSeconds = 0;
+  for (let segment = 0; segment < indices.length; segment += 1) {
+    const sourceFile = `${segment}/qcamera.ts`, bytes = files.get(sourceFile);
+    assert.equal(hash(bytes), provenance.segments[sourceFile].expectedSha256, 'Reference PNGs must use the pinned production bytes');
+    for (const frameIndex of indices[segment]) {
+      const filename = `${folder}/segment-${segment}-frame-${String(frameIndex).padStart(3, '0')}.png`;
+      const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-xerror', '-i', 'pipe:0',
+        '-map', '0:v:0', '-vf', `select='eq(n,${frameIndex})'`,
+        '-fps_mode', 'passthrough', '-an', '-sn', '-dn', '-c:v', 'png', '-pix_fmt', 'rgb24',
+        '-threads:v', '1', '-f', 'image2pipe', 'pipe:1'];
+      let png;
+      try {
+        // Decode through EOF so the child consumes all stdin bytes. The select
+        // expression emits exactly one frame without an early pipe close.
+        // Only this owned offline decoder child may be terminated by its timeout.
+        png = execFileSync('ffmpeg', args, { input: bytes, timeout: 15000, maxBuffer: 2 * 1024 * 1024,
+          stdio: ['pipe', 'pipe', 'pipe'] });
+      } catch (error) {
+        evidence.status = 'failed';
+        evidence.failure = { sourceFile, frameIndex, status: error.status ?? null, signal: error.signal ?? null,
+          code: error.code ?? null, stderr: error.stderr?.toString('utf8').slice(0, 4096) ?? '' };
+        throw new Error(`Offline reference PNG export failed for segment ${segment}, frame ${frameIndex}`);
+      }
+      assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'FFmpeg must return one PNG reference frame');
+      assert.equal(png.readUInt32BE(16), 526); assert.equal(png.readUInt32BE(20), 330);
+      let offset = 8, imageEnded = false;
+      while (offset + 12 <= png.length) {
+        const length = png.readUInt32BE(offset), type = png.subarray(offset + 4, offset + 8).toString('ascii');
+        offset += length + 12;
+        assert.ok(offset <= png.length, 'Every PNG chunk is complete');
+        if (type === 'IEND') { assert.equal(length, 0); imageEnded = true; break; }
+      }
+      assert.ok(imageEnded); assert.equal(offset, png.length, 'The output contains exactly one PNG image');
+      await writeFile(resolve(output, filename), png);
+      evidence.frames.push({ filename, sha256: hash(png), bytes: png.length, width: 526, height: 330,
+        sourceFile, sourceSha256: hash(bytes), segment, frameIndex, playlistStartSeconds,
+        approximatePlaylistTimeSeconds: Number((playlistStartSeconds + frameIndex / nominalFps).toFixed(6)),
+        ffmpegArguments: args });
     }
-    videoOnlyFiles.set(file, bytes);
+    playlistStartSeconds += durations[segment];
   }
-  report.videoOnlySha256 = Object.fromEntries([...videoOnlyFiles].map(([file, bytes]) => [file, hash(bytes)]));
-  return { files, videoOnlyFiles };
+  assert.equal(evidence.frames.length, 9, 'Export every predeclared production reference frame');
+  evidence.status = 'exported';
 }
 
 async function startDriver() {
@@ -295,12 +324,13 @@ async function startDriver() {
   return origin;
 }
 
-async function startFixtureServer(files, videoOnlyFiles, cases) {
+async function startFixtureServer(variants, cases) {
   const server = createServer((req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
     const match = /^\/case\/([a-zA-Z0-9-]+)\/(.*)$/.exec(pathname);
     const result = match && cases.get(match[1]), path = match?.[2];
-    let bytes = result && (result.variant === 'video-only' && videoOnlyFiles.has(path) ? videoOnlyFiles.get(path) : files.get(path));
+    const files = result && variants.get(result.variant);
+    let bytes = files?.get(path);
     let type = path?.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : path?.endsWith('.ts') ? 'video/mp2t' : 'text/javascript';
     const missing = result?.availability === 'missing-middle' && path === '1/qcamera.ts';
     if (missing) bytes = undefined;
@@ -339,11 +369,17 @@ function delivery(result, path, size) {
   return { completeFileDelivered: end === size - 1, coveredThroughByte: end, fileBytes: size, requests: requests.length };
 }
 
-async function runCase(plan, driverOrigin, fixtureOrigin, cases, sessionIds, files) {
+async function runCase(plan, driverOrigin, fixtureOrigin, cases, sessionIds, variants) {
+  const files = variants.get(plan.variant);
+  assert.ok(files, 'The declared variant has its own verified fixture map');
   const result = { ...plan, isolation: 'fresh WebDriver session, not a fresh Safari process', rvfcObserved: false,
     httpRequests: [], screenshots: [], observations: [], requiresVisualReview: true,
     visualReview: { status: 'pending', requestedTime: plan.target, toleranceSeconds: 0.6,
-      instruction: 'Read the burned frame timestamp against the requested target AND measured media clock. A frame matching a browser-adjusted clock does not prove the requested target was reached.' } };
+      method: plan.variant === 'public-production' ? 'independent-offline-reference-frame-review' : 'burned-timestamp-review',
+      referenceFrames: plan.variant === 'public-production' ? report.productionReferenceFrames.frames.map(({ filename }) => filename) : [],
+      instruction: plan.variant === 'public-production'
+        ? 'This production clip has no burned timestamp. Independently compare screenshots with the pinned offline reference frames, including the first frame of segment 2 near 120s. Record the picture position separately from the requested target and measured browser clock; infer no presented-frame success from clock/quality counters.'
+        : 'Read the burned frame timestamp against the requested target AND measured media clock. A frame matching a browser-adjusted clock does not prove the requested target was reached.' } };
   report.cases.push(result); cases.set(plan.name, result);
   let client;
   try {
@@ -369,6 +405,7 @@ async function runCase(plan, driverOrigin, fixtureOrigin, cases, sessionIds, fil
     if (plan.availability === 'missing-middle') {
       result.missingMiddleBeforeSeek = await waitUntil(() => result.httpRequests.some(({ path, status, completed }) =>
         path === '1/qcamera.ts' && status === 404 && completed), 10000);
+      assert.equal(result.missingMiddleBeforeSeek, true, 'The real middle-segment 404 must precede the later target seek');
     }
     await client.evaluate(() => document.querySelector('video').pause());
     const observation = { requestedTime: plan.target, before: await client.evaluate(mediaSample) };
@@ -393,6 +430,7 @@ async function runCase(plan, driverOrigin, fixtureOrigin, cases, sessionIds, fil
     observation.pausedMeasurementsCompletedAt = Date.now();
     const targetPath = `${Math.floor(plan.target / 60)}/qcamera.ts`;
     observation.targetDeliveryBeforeScreenshot = delivery(result, targetPath, files.get(targetPath).length);
+    assert.equal(observation.targetDeliveryBeforeScreenshot.completeFileDelivered, true, 'The complete target fragment must be delivered before the first target screenshot');
     result.visualReview.actualClockTime = observation.paused.time;
     result.firstPausedSamplesRecorded = true;
     await capture(client, result, `paused-${plan.target}`);
@@ -402,9 +440,9 @@ async function runCase(plan, driverOrigin, fixtureOrigin, cases, sessionIds, fil
     observation.afterResumePaused = await client.evaluate(mediaSample);
     await capture(client, result, `resumed-${plan.target}`);
     result.finalMedia = await client.evaluate(mediaSample);
-    assert.equal(result.finalMedia.src.startsWith('blob:'), plan.transport === 'mse', 'The declared transport was actually used');
-    if (plan.transport === 'native') { assert.ok(result.capabilities.hls); assert.equal(result.finalMedia.src, `${url}complete.m3u8`); }
-    assert.equal(result.httpRequests.some(({ path }) => path === 'hls.js'), plan.transport === 'mse');
+    assert.equal(plan.transport, 'native');
+    assert.ok(result.capabilities.hls); assert.equal(result.finalMedia.src, `${url}complete.m3u8`, 'The declared native transport was actually used');
+    assert.equal(result.httpRequests.some(({ path }) => path === 'hls.js'), false, 'This native-only reference does not load Hls.js');
     result.deliveries = {};
     for (const path of ['complete.m3u8', '0/qcamera.ts', `${Math.floor(plan.target / 60)}/qcamera.ts`]) {
       result.deliveries[path] = delivery(result, path, files.get(path).length);
@@ -441,13 +479,14 @@ async function main() {
   let fixtureServer;
   try {
     await preflight();
-    const { files, videoOnlyFiles } = await loadFixtures();
+    const variants = await loadFixtures();
+    await exportReferenceFrames(variants.get('public-production'), report.publicProductionProvenance);
     const driverOrigin = await startDriver();
     const cases = new Map(), sessionIds = new Set();
-    const fixture = await startFixtureServer(files, videoOnlyFiles, cases); fixtureServer = fixture.server;
+    const fixture = await startFixtureServer(variants, cases); fixtureServer = fixture.server;
     report.fixtureOrigin = fixture.origin; report.status = 'collecting'; await save();
     for (const plan of report.plan) {
-      await runCase(plan, driverOrigin, fixture.origin, cases, sessionIds, files);
+      await runCase(plan, driverOrigin, fixture.origin, cases, sessionIds, variants);
       const last = report.cases.at(-1);
       if (last.sessionStateUnknown) throw new Error('Session creation did not return an owned session ID; stop instead of risking overlapping Safari sessions');
       if (last.sessionId && !last.sessionDeleted) throw new Error('The owned session could not be closed; stop instead of creating overlapping Safari sessions');
