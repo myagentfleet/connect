@@ -11,12 +11,14 @@ import { webkit, devices } from 'playwright';
 const execute = promisify(execFile);
 const output = resolve(process.env.QA769_OUTPUT || 'qa769-reference-results');
 const fixtures = resolve('public/demo-video');
+const audioVariantDir = process.env.QA769_AUDIO_VARIANT_DIR && resolve(process.env.QA769_AUDIO_VARIANT_DIR);
 const delay = (ms) => new Promise((accept) => setTimeout(accept, ms));
 const report = {
   started: new Date().toISOString(), acceptanceRun: false, hostOS: process.platform,
-  purpose: 'Separate all-200 fixture playback from Connect and from the RVFC renderer path in patched macOS WebKit.',
-  controls: 'Original checked-in media bytes, Hls1.7.3, normal headed launch. Each arm and each seek target uses a fresh browser process. No screenshot is taken until after startup and the first paused seek are measured. Native uses iPhone13 emulation, not physical iOS or branded Safari.',
-  order: ['no-rvfc-A1', 'rvfc-B1', 'rvfc-B2', 'no-rvfc-A2'],
+  purpose: audioVariantDir ? 'Compare original A/V against a packet-preserving video-only variant in plain MSE playback, without RVFC.'
+    : 'Separate all-200 fixture playback from Connect and from the RVFC renderer path in patched macOS WebKit.',
+  controls: 'Pinned original media plus an explicitly declared video-only variant when requested; Hls1.7.3 and normal headed launch. Each arm and each seek target uses a fresh browser process. No screenshot is taken until after startup and the first paused seek are measured. Native uses iPhone13 emulation, not physical iOS or branded Safari.',
+  order: audioVariantDir ? ['original-A1', 'video-only-B1', 'video-only-B2', 'original-A2'] : ['no-rvfc-A1', 'rvfc-B1', 'rvfc-B2', 'no-rvfc-A2'],
   oracle: 'Startup/resume requires at least 2s without a seek or invalid state, >1.7s media-clock advancement, and increases in totalVideoFrames minus droppedVideoFrames both from the initial baseline and after a late baseline at1.5s. Paused seeks retain clock, quality counters and screenshots in both arms; RVFC frame timestamps are additionally checked only in the RVFC arm. Screenshots in the no-RVFC arm require visual review before any presented-frame claim.',
   rendererEvidence: [
     'https://github.com/microsoft/playwright/blob/v1.64.0/browser_patches/webkit/UPSTREAM_CONFIG.sh',
@@ -99,10 +101,26 @@ async function main() {
     files.set(file, await readFile(resolve(fixtures, file)));
   }
   report.sha256 = Object.fromEntries([...files].map(([file, bytes]) => [file, createHash('sha256').update(bytes).digest('hex')]));
+  const videoOnlyFiles = new Map();
+  if (audioVariantDir) {
+    report.audioVariantProvenance = JSON.parse(await readFile(resolve(audioVariantDir, 'provenance.json'), 'utf8'));
+    for (const file of ['0/qcamera.ts', '1/qcamera.ts', '2/qcamera.ts']) videoOnlyFiles.set(file, await readFile(resolve(audioVariantDir, file)));
+    report.videoOnlySha256 = Object.fromEntries([...videoOnlyFiles].map(([file, bytes]) => [file, createHash('sha256').update(bytes).digest('hex')]));
+    for (const [file, hash] of Object.entries(report.videoOnlySha256)) {
+      assert.equal(report.audioVariantProvenance.source_sha256[file], report.sha256[file]);
+      assert.equal(report.audioVariantProvenance.segments[file].sha256, hash);
+      assert.equal(report.audioVariantProvenance.segments[file].strict_decode_passed, true);
+    }
+  }
+  report.plan = audioVariantDir
+    ? [1, 2, 3, 4].flatMap((block) => report.order.map((arm) => ({ transport: 'mse', target: 75, rvfc: false,
+      variant: arm.startsWith('video-only') ? 'video-only' : 'original', name: `mse-audio-block-${block}-${arm}-target-75` })))
+    : ['mse', 'native'].flatMap((transport) => [75, 125].flatMap((target) => report.order.map((arm) => ({
+      transport, target, rvfc: arm.startsWith('rvfc-'), variant: 'original', name: `${transport}-${arm}-target-${target}` }))));
   let active;
   const server = createServer((req, res) => {
     const path = new URL(req.url, 'http://localhost').pathname.slice(1);
-    let bytes = files.get(path);
+    let bytes = active?.variant === 'video-only' && videoOnlyFiles.has(path) ? videoOnlyFiles.get(path) : files.get(path);
     let type = path.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : path.endsWith('.ts') ? 'video/mp2t' : 'text/javascript';
     if (path === '') {
       type = 'text/html';
@@ -110,7 +128,7 @@ async function main() {
         <meta name="viewport" content="width=device-width,initial-scale=1"><title>Playback reference</title>
         <style>body{margin:16px;font:16px sans-serif;color:#ddd;background:#16181a}video{display:block;width:320px;height:200px;max-width:100%;background:black}p{max-width:640px}</style>
         </head><body><h1>Playback reference</h1><p>${active.name}</p><video controls playsinline muted preload="auto"></video>
-        <p>Original media, every request available. No Connect application code.</p>
+        <p>${active.variant === 'video-only' ? 'Packet-preserving video-only variant' : 'Original media'}, every request available. No Connect application code.</p>
         ${active.transport === 'mse' ? '<script src="/hls.js"></script>' : ''}
         <script>
           const video = document.querySelector('video');
@@ -126,7 +144,9 @@ async function main() {
           ` : "video.src = '/complete.m3u8'; video.load(); video.currentTime = 0;"}
         </script></body></html>`);
     }
-    const entry = { path, at: Date.now(), method: req.method, range: req.headers.range || null, status: bytes ? 200 : 404 };
+    const entry = { path, at: Date.now(), variant: active?.variant, method: req.method,
+      range: req.headers.range || null, status: bytes ? 200 : 404,
+      fileSha256: bytes && path.endsWith('.ts') ? createHash('sha256').update(bytes).digest('hex') : null };
     active?.httpRequests.push(entry);
     res.once('close', () => { entry.completed = res.writableFinished; });
     if (!bytes) { res.writeHead(404); res.end('Not found'); return; }
@@ -144,9 +164,9 @@ async function main() {
   await new Promise((accept) => server.listen(0, '127.0.0.1', accept));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    for (const transport of ['mse', 'native']) for (const target of [75, 125]) for (const arm of report.order) {
-      const rvfc = arm.startsWith('rvfc-');
-      const result = { name: `${transport}-${arm}-target-${target}`, transport, rvfc, target, httpRequests: [], screenshots: [], pageErrors: [], observations: [] };
+    for (const plan of report.plan) {
+      const { transport, target, rvfc } = plan;
+      const result = { ...plan, httpRequests: [], screenshots: [], pageErrors: [], observations: [] };
       report.cases.push(result); active = result;
       const browser = await webkit.launch({ headless: false });
       const context = await browser.newContext(transport === 'native' ? devices['iPhone 13'] : { viewport: { width: 1280, height: 800 } });
@@ -158,6 +178,7 @@ async function main() {
         report.browserVersion = browser.version();
         result.capabilities = await page.locator('video').evaluate((video) => ({ userAgent: navigator.userAgent,
           hls: video.canPlayType('application/vnd.apple.mpegurl'), mediaSource: typeof MediaSource,
+          managedMediaSource: typeof globalThis.ManagedMediaSource,
           rvfc: typeof video.requestVideoFrameCallback, quality: typeof video.getVideoPlaybackQuality }));
         try { result.startup = { passed: true, ...await sustained(page) }; }
         catch (error) { result.startup = { passed: false, error: error.message, after: await sample(page) }; }
@@ -172,6 +193,8 @@ async function main() {
             observation.clockSettled = true;
           } catch (error) { observation.clockSettled = false; observation.clockError = error.message; }
           await delay(1000); observation.paused = await sample(page);
+          observation.stablePaused = observation.paused.paused && !observation.paused.seeking && observation.paused.ready >= 2
+            && Math.abs(observation.paused.time - requestedTime) < 0.3;
           observation.rvfcFrameMatches = rvfc ? Boolean(observation.paused.lastFrame
             && observation.paused.lastFrame.at > observation.before.at
             && Math.abs(observation.paused.lastFrame.mediaTime - requestedTime) < 0.6) : null;

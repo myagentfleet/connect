@@ -67,9 +67,6 @@ const styles = () => ({
       color: Colors.white,
       boxShadow: `inset 0 0 0 1px ${Colors.white08}`,
     },
-    '&.disabled': {
-      cursor: 'default',
-    },
   },
   mediaOptionText: {
     fontSize: 12,
@@ -156,45 +153,6 @@ const styles = () => ({
     color: Colors.white,
     '& p': { fontSize: '0.8rem' },
   },
-  noPrimePopover: {
-    borderRadius: 16,
-    padding: 16,
-    border: `1px solid ${Colors.white10}`,
-    backgroundColor: Colors.grey800,
-    marginTop: 12,
-    zIndex: 5,
-    '& p': {
-      fontSize: '0.9rem',
-      color: Colors.white,
-      margin: 0,
-    },
-  },
-  noPrimeHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-    '& p': {
-      fontSize: '1rem',
-      fontWeight: 500,
-    },
-  },
-  noPrimeButton: {
-    padding: '6px 24px',
-    borderRadius: 15,
-    textTransform: 'none',
-    minHeight: 'unset',
-    color: Colors.white,
-    backgroundColor: Colors.primeBlue50,
-    '&:disabled': {
-      background: '#ddd',
-      color: Colors.grey900,
-    },
-    '&:hover': {
-      color: Colors.white,
-      backgroundColor: Colors.primeBlue200,
-    },
-  },
 });
 
 const MediaType = {
@@ -223,19 +181,11 @@ class Media extends Component {
     };
 
     this.handleMuteToggle = this.handleMuteToggle.bind(this);
-    this.renderMediaOptions = this.renderMediaOptions.bind(this);
-    this.renderMenus = this.renderMenus.bind(this);
     this.renderUploadMenuItem = this.renderUploadMenuItem.bind(this);
     this.copySegmentName = this.copySegmentName.bind(this);
     this.openInUseradmin = this.openInUseradmin.bind(this);
     this.shareCurrentRoute = this.shareCurrentRoute.bind(this);
-    this.uploadFile = this.uploadFile.bind(this);
-    this.uploadFilesAll = this.uploadFilesAll.bind(this);
-    this.getUploadStats = this.getUploadStats.bind(this);
-    this._uploadStats = this._uploadStats.bind(this);
-    this.downloadFile = this.downloadFile.bind(this);
     this.onPublicToggle = this.onPublicToggle.bind(this);
-    this.fetchRoutePreserved = this.fetchRoutePreserved.bind(this);
     this.onPreserveToggle = this.onPreserveToggle.bind(this);
 
     this.routeViewed = false;
@@ -718,7 +668,7 @@ class Media extends Component {
             <CircularProgress size={ 36 } style={{ color: Colors.white }} />
           </div>
           )}
-          { buttons.filter((b) => Boolean(b)).map(this.renderUploadMenuItem)}
+          { buttons.map(this.renderUploadMenuItem)}
           <hr />
           <MenuItem
             className={ classes.filesItem }
@@ -955,7 +905,6 @@ const stateToProps = (state) => ({
   offset: Math.floor((state.offset || 0) / 60000) * 60000,
   zoom: state.zoom,
   loop: state.loop,
-  filter: state.filter,
   files: state.files,
   profile: state.profile,
   hasAudio: state.hasAudio,
