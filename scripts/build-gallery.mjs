@@ -1,4 +1,4 @@
-/* eslint-disable no-await-in-loop -- captures are intentionally serialized in one browser */
+/* eslint-disable no-await-in-loop -- each worker captures isolated browser contexts sequentially */
 import { execFile } from 'node:child_process';
 import {
   access, cp, mkdir, mkdtemp, readFile, rm, writeFile,
@@ -21,7 +21,7 @@ const FIXED_TIMESTAMP = Date.parse(FIXED_TIME);
 const LOCALE = 'en-US';
 const TIMEZONE = 'America/Los_Angeles';
 const CHANGE_THRESHOLD = 0.0001;
-const CAPTURE_CONCURRENCY = 4;
+const CAPTURE_CONCURRENCY = 6;
 const CLIP_FILENAME = 'coastal-drive.mp4';
 const CLIP_ROUTE_PATH = `/${DONGLE_ID}/${LOG_ID}/10/30`;
 
