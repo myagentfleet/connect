@@ -16,6 +16,7 @@ vi.mock('hls.js', () => ({
   default: class {
     static isSupported = vi.fn(() => true);
     static Events = { ERROR: 'error', BUFFER_CODECS: 'codecs', MANIFEST_PARSED: 'manifest' };
+    static ErrorDetails = { BUFFER_STALLED_ERROR: 'bufferStalledError' };
     levels = [];
     handlers = {};
     loadSource = vi.fn();
@@ -123,10 +124,13 @@ test('the media clock drives progress without feedback seeks or rate corrections
   expect(video.currentTime).toBe(12.345);
 });
 
-test('advancing media clears stale native waiting without a matching playing event', () => {
+test.each(['native', 'HLS'])('advancing media clears %s waiting without a matching playing event', async (transport) => {
+  if (transport === 'HLS') HTMLMediaElement.prototype.canPlayType.mockReturnValue('');
   const { video, store } = mountVideo();
+  await finishImport();
   ready(video);
-  fireEvent.waiting(video);
+  if (transport === 'native') fireEvent.waiting(video);
+  else act(() => mocks.streams[0].emit(Hls.Events.ERROR, { fatal: false, details: Hls.ErrorDetails.BUFFER_STALLED_ERROR }));
   fireEvent.timeUpdate(video);
   expect(store.getState().videoStatus).toBe('loading');
   media(video, { readyState: 2 });
@@ -302,6 +306,7 @@ test.each(['retry', 'seek'])('recovers from a fatal HLS error through %s and ign
   expect(store.getState().hasAudio).toBe(false);
   ready(video);
   fireEvent.seeked(video);
+  act(() => stream.emit(Hls.Events.ERROR, { fatal: false, details: Hls.ErrorDetails.BUFFER_STALLED_ERROR }));
   expect(store.getState().videoStatus).toBe('ready');
   expect(queryByRole('button', { name: 'Retry' })).toBeNull();
   expect(store.getState().offset).toBe(recovery === 'seek' ? 17000 : 2000);

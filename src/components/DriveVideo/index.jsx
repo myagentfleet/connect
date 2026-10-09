@@ -63,6 +63,7 @@ class RouteVideo extends Component {
     this.stream = openStream(this.video.current, url, {
       startPosition: this.seekPosition(offset),
       onError: (error) => { if (active()) this.onStreamError(error); },
+      onWaiting: () => { if (active()) this.onWaiting(); },
       onAudio: () => { if (active()) this.props.dispatch(setHasAudio(true)); },
     });
   };
