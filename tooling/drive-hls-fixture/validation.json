@@ -1,0 +1,37 @@
+{
+  "source": "scripts/fixtures/gallery-test-pattern.mp4",
+  "sourceSha256": "492749ce2778f662dfc6586f984335f792b1905a65a30abad6101fd5d05afdd9",
+  "generator": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+  "generation": "ffmpeg -hide_banner -loglevel error -stream_loop 3 -i scripts/fixtures/gallery-test-pattern.mp4 -map_metadata -1 -an -c:v copy -f hls -hls_time 2 -hls_list_size 0 -hls_playlist_type vod -hls_flags independent_segments -hls_segment_filename tooling/drive-hls-fixture/segment-%02d.ts -y tooling/drive-hls-fixture/playlist.m3u8",
+  "durationSeconds": 8,
+  "decodedFrames": 96,
+  "codec": "h264",
+  "profile": "Constrained Baseline",
+  "pixelFormat": "yuv420p",
+  "width": 320,
+  "height": 180,
+  "frameRate": "12/1",
+  "segmentCount": 4,
+  "files": {
+    "playlist.m3u8": {
+      "bytes": 269,
+      "sha256": "019e10607abd342755e1f9e3434bdda8152c65d8a26263780e985a3feac42d0b"
+    },
+    "segment-00.ts": {
+      "bytes": 20492,
+      "sha256": "c2ecf16cea7c58df5c28408c3c52edd68f8ad0c39947b28a858a75d9a408dcef"
+    },
+    "segment-01.ts": {
+      "bytes": 20492,
+      "sha256": "3186393465265b749b2c758d04edc916a6e15b9792ec9d72c6b90ab02046a7bc"
+    },
+    "segment-02.ts": {
+      "bytes": 20492,
+      "sha256": "a77e7198b57b9f2404b6699eebb0e7be10a81e10123f2869b39eabea85bd398f"
+    },
+    "segment-03.ts": {
+      "bytes": 20492,
+      "sha256": "48e728f259f1c73f77a5e6aad8abbb6aca7d5c08c9d84340126d717a05310fa3"
+    }
+  }
+}

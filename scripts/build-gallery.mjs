@@ -285,17 +285,20 @@ async function downloadBaseline(baselineUrl, destination) {
 }
 
 async function fetchFixtures() {
+  const startedAt = performance.now();
   const routeUrl = `https://api.commadotai.com/v1/route/${encodeURIComponent(ROUTE_NAME)}/`;
   const route = await (await getResponse(routeUrl)).json();
   const assetRoot = new URL(route.url);
   if (assetRoot.protocol !== 'https:') throw new Error(`Expected an HTTPS route asset URL, got ${route.url}`);
   const assetRootUrl = assetRoot.href.replace(/\/$/, '');
-  const segmentEvents = await Promise.all(
-    Array.from({ length: route.maxqlog + 1 }, async (_, segment) => (
+  const [segmentEvents, sprite, clip] = await Promise.all([
+    Promise.all(Array.from({ length: route.maxqlog + 1 }, async (_, segment) => (
       (await getResponse(`${assetRootUrl}/${segment}/events.json`)).json()
-    )),
-  );
-  const sprite = await getResponse(`${assetRootUrl}/0/sprite.jpg`);
+    ))),
+    getResponse(`${assetRootUrl}/0/sprite.jpg`).then((response) => response.arrayBuffer()),
+    readFile(new URL('./fixtures/gallery-test-pattern.mp4', import.meta.url)),
+  ]);
+  console.log(`Prepared route fixtures in ${Math.round(performance.now() - startedAt)} ms`);
   return {
     events: segmentEvents.map((events) => events.map((event) => ({
       ...event,
@@ -306,8 +309,8 @@ async function fetchFixtures() {
           : event.data?.alertStatus,
       },
     }))),
-    sprite: Buffer.from(await sprite.arrayBuffer()),
-    clip: await readFile(new URL('./fixtures/gallery-test-pattern.mp4', import.meta.url)),
+    sprite: Buffer.from(sprite),
+    clip,
   };
 }
 
@@ -701,11 +704,11 @@ async function openGalleryModal(page, state, label) {
 
 async function captureOne(browser, origin, outputPath, state, viewport, fixtures, verifyCurrent) {
   const context = await browser.createBrowserContext();
-  const page = await context.newPage();
   const failures = [];
   const pageState = GALLERY_STATES.find(({ name }) => name === (state.page ?? state.name));
   const readyState = state.readySelector || state.readyText ? state : pageState;
   try {
+    const page = await context.newPage();
     await page.setViewport({ width: viewport.width, height: viewport.height, deviceScaleFactor: 1 });
     await page.emulateTimezone(TIMEZONE);
     await page.emulateMediaFeatures([
@@ -870,26 +873,31 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
   }
 }
 
-async function captureRenderers(renderers, output, fixtures) {
+async function launchGalleryBrowser() {
+  const startedAt = performance.now();
+  const browser = await puppeteer.launch({
+    headless: 'shell',
+    env: { ...process.env, LANG: `${LOCALE}.UTF-8`, LC_ALL: `${LOCALE}.UTF-8`, TZ: TIMEZONE },
+    args: [
+      '--disable-background-networking',
+      '--disable-default-apps',
+      '--disable-setuid-sandbox',
+      '--disable-sync',
+      '--force-color-profile=srgb',
+      `--lang=${LOCALE}`,
+      '--no-sandbox',
+    ],
+  });
+  console.log(`Started gallery browser in ${Math.round(performance.now() - startedAt)} ms`);
+  return browser;
+}
+
+async function captureRenderers(browser, renderers, output, fixtures) {
   // main gives each run a fresh temporary directory, including any downloaded baseline.
   await mkdir(output, { recursive: true });
   for (const renderer of renderers) {
     const server = await serveDirectory(renderer.directory);
-    let browser;
     try {
-      browser = await puppeteer.launch({
-        headless: 'shell',
-        env: { ...process.env, LANG: `${LOCALE}.UTF-8`, LC_ALL: `${LOCALE}.UTF-8`, TZ: TIMEZONE },
-        args: [
-          '--disable-background-networking',
-          '--disable-default-apps',
-          '--disable-setuid-sandbox',
-          '--disable-sync',
-          '--force-color-profile=srgb',
-          `--lang=${LOCALE}`,
-          '--no-sandbox',
-        ],
-      });
       const destination = resolve(output, renderer.name);
       await mkdir(destination, { recursive: true });
       // A local pre-change checkout does not implement the new direct-link states.
@@ -905,7 +913,6 @@ async function captureRenderers(renderers, output, fixtures) {
         }
       }));
     } finally {
-      if (browser) await browser.close();
       await server.close();
     }
   }
@@ -1128,22 +1135,24 @@ async function main() {
   }
   if (baseSource && baselineUrl) throw new Error('--base and --baseline-url are mutually exclusive');
   const temporary = await mkdtemp(resolve(tmpdir(), 'connect-gallery-'));
+  const browserPromise = launchGalleryBrowser();
   try {
     const output = resolve(args.output ?? 'dist-gallery');
     const currentRenderer = output;
     const baseRenderer = resolve(temporary, 'renderer-base');
     const captures = resolve(temporary, 'captures');
-    const [fixtures, baseSha] = await Promise.all([
+    const [fixtures, baseSha, , browser] = await Promise.all([
       fetchFixtures(),
       baselineUrl ? downloadBaseline(baselineUrl, resolve(captures, 'base')) : args['base-sha'],
       buildRenderer(source, currentRenderer),
+      browserPromise,
     ]);
     const renderers = [{ name: 'current', directory: currentRenderer }];
     if (baseSource) {
       await buildRenderer(baseSource, baseRenderer);
       renderers.unshift({ name: 'base', directory: baseRenderer });
     }
-    await captureRenderers(renderers, captures, fixtures);
+    await captureRenderers(browser, renderers, captures, fixtures);
     await buildReport(
       captures,
       output,
@@ -1153,7 +1162,12 @@ async function main() {
       args['artifact-output'] ? resolve(args['artifact-output']) : null,
     );
   } finally {
-    await rm(temporary, { recursive: true, force: true });
+    try {
+      const browser = await browserPromise.catch(() => null);
+      if (browser) await browser.close();
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
   }
 }
 

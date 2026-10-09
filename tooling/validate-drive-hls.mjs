@@ -1,0 +1,322 @@
+// Fork-only validation: run against the unmodified Docker app, never a live account.
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
+
+const { values } = parseArgs({ options: {
+  origin: { type: 'string', default: 'http://127.0.0.1:8080' },
+  output: { type: 'string', default: 'drive-hls-results' },
+} });
+const origin = new URL(values.origin).origin;
+assert(['127.0.0.1', 'localhost', '[::1]'].includes(new URL(origin).hostname), 'Use a loopback app origin');
+const output = resolve(values.output);
+const fixtureDirectory = resolve(dirname(fileURLToPath(import.meta.url)), 'drive-hls-fixture');
+const require = createRequire(resolve('package.json'));
+const DONGLE = 'aaaaaaaaaaaaaaaa';
+const LOG = '2026-08-06--12-00-00';
+const FULLNAME = `${DONGLE}|${LOG}`;
+const DRIVE_PATH = `/${DONGLE}/${LOG}`;
+const VIDEO = '.DriveView video';
+const WAIT = { timeout: 15000, polling: 50 };
+const report = {
+  sourceSha: process.env.GITHUB_SHA || null,
+  origin,
+  startedAt: new Date().toISOString(),
+  scope: 'Unmodified built app with actual HLS.js and browser decoder; all account/device/media responses are synthetic and intercepted.',
+  limitations: 'No live device, signed media URL, remote CDN, adaptive bitrate, audio, or Safari/native-HLS verification.',
+  passed: false,
+  cases: [],
+};
+
+function fixtureData() {
+  const now = Math.floor(Date.now() / 1000);
+  const start = Date.UTC(2026, 7, 6, 12);
+  const route = {
+    fullname: FULLNAME, dongle_id: DONGLE, create_time: start / 1000,
+    start_time: '2026-08-06T12:00:00', end_time: '2026-08-06T12:00:08',
+    start_time_utc_millis: start, end_time_utc_millis: start + 8000,
+    segment_numbers: [0], segment_start_times: [start], segment_end_times: [start + 8000],
+    maxqlog: 0, procqlog: 0, distance: 0.1, make: 'ford', platform: 'FORD_BRONCO_SPORT_MK1',
+    is_public: true, is_preserved: true, version: '0.10.4', url: `${origin}/__hls-route`,
+    start_lat: 32.75, start_lng: -117.19, end_lat: 32.75, end_lng: -117.19,
+    startLocation: { place: 'Synthetic start', details: 'Validation fixture' },
+    endLocation: { place: 'Synthetic end', details: 'Validation fixture' },
+  };
+  const device = {
+    dongle_id: DONGLE, alias: 'Synthetic HLS device', device_type: 'tici',
+    is_owner: true, prime: false, version: '0.10.4', serial: 'fixture-only',
+    fetched_at: now, last_athena_ping: now, rpc: { not_car: false },
+  };
+  return { route, device, profile: { id: 'hls-fixture', user_id: 'hls-fixture', email: 'fixture@example.invalid', superuser: false } };
+}
+
+function respond(request, body, contentType = 'application/json', status = 200) {
+  return request.respond({ status, contentType, body,
+    headers: { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' },
+  });
+}
+
+async function intercept(request, data, assets, result) {
+  const url = new URL(request.url());
+  if (['data:', 'blob:'].includes(url.protocol)) return request.continue();
+  const path = decodeURIComponent(url.pathname).replace(/\/$/, '');
+  const json = (value) => respond(request, JSON.stringify(value));
+  if (url.origin === origin) {
+    if (path.startsWith('/__hls-fixture/')) {
+      const name = path.slice('/__hls-fixture/'.length);
+      assert(assets.has(name) && name.endsWith('.ts'), `Unknown HLS segment ${name}`);
+      result.segments.push(name);
+      return respond(request, assets.get(name), 'video/mp2t');
+    }
+    if (path === '/__hls-route/0/events.json' || path === '/__hls-route/0/coords.json') return json([]);
+    if (path === '/__hls-route/0/sprite.jpg') {
+      return respond(request, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=', 'base64'), 'image/png');
+    }
+    return request.continue();
+  }
+  if (url.hostname === 'cdn.jsdelivr.net' && url.pathname.includes('/hls.js@')) {
+    assert.equal(url.pathname, '/npm/hls.js@1.4.8/dist/hls.min.js');
+    result.sdkRequests += 1;
+    return respond(request, assets.get('sdk'), 'text/javascript');
+  }
+  if (!['api.comma.ai', 'billing.comma.ai', 'athena.comma.ai'].includes(url.hostname)) {
+    result.blockedExternal.push(`${request.method()} ${url.origin}${url.pathname}`);
+    return request.abort('blockedbyclient');
+  }
+  if (request.method() === 'OPTIONS') {
+    return request.respond({ status: 204, headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    } });
+  }
+  result.backendRequests.push(`${request.method()} ${url.hostname}${path}`);
+  if (url.hostname === 'api.comma.ai' && request.method() === 'GET') {
+    if (path === '/v1/me') return json(data.profile);
+    if (path === '/v1/me/devices') return json([data.device]);
+    if (path === '/v1/me/turn') return json({ iceServers: [] });
+    if (path === `/v1.1/devices/${DONGLE}`) return json(data.device);
+    if (path === `/v1.1/devices/${DONGLE}/stats`) return json({ all: { distance: 1, minutes: 1, routes: 1 } });
+    if (path === `/v1/devices/${DONGLE}/location`) return json({ lat: 32.75, lng: -117.19, time: Math.floor(Date.now() / 1000) });
+    if ([`/v1/devices/${DONGLE}/routes_segments`, `/v1/devices/${DONGLE}/routes/preserved`].includes(path)) return json([data.route]);
+    if (path === `/v1/devices/${DONGLE}/athena_offline_queue`) return json([]);
+    if (path === `/v1/route/${FULLNAME}/files`) return json({});
+    if (path === `/v1/route/${FULLNAME}/qcamera.m3u8`) {
+      result.manifestRequests += 1;
+      const manifest = assets.get('playlist.m3u8').toString().replace(/^segment-\d+\.ts$/gm, (name) => `${origin}/__hls-fixture/${name}`);
+      return respond(request, manifest, 'application/vnd.apple.mpegurl');
+    }
+  }
+  if (url.hostname === 'billing.comma.ai' && request.method() === 'GET') {
+    if (path === '/v1/prime/subscribe_info') return json({ eligible: false, device_online: true });
+    if (path === '/v1/prime/subscription') return json(null);
+  }
+  if (url.hostname === 'athena.comma.ai' && path === `/${DONGLE}` && request.method() === 'POST') {
+    const payload = JSON.parse(request.postData() || '{}');
+    result.athenaMethods.push(payload.method);
+    const replies = {
+      getNotCar: false, getNetworkMetered: false, getNetworkType: 1,
+      getMessage: { peripheralState: { voltage: 12300 } }, listUploadQueue: [],
+      setRouteViewed: true,
+    };
+    assert(Object.hasOwn(replies, payload.method), `Unexpected synthetic Athena method ${payload.method}`);
+    return json({ jsonrpc: '2.0', id: payload.id, result: replies[payload.method] });
+  }
+  throw new Error(`Unmocked backend request: ${request.method()} ${url.hostname}${path}`);
+}
+
+async function mediaState(page) {
+  return page.$eval(VIDEO, (video) => ({
+    currentTime: video.currentTime, duration: video.duration, paused: video.paused,
+    readyState: video.readyState, width: video.videoWidth, height: video.videoHeight,
+    frames: video.getVideoPlaybackQuality().totalVideoFrames,
+    currentSrc: video.currentSrc, error: video.error?.message || null,
+    sameVideo: video === window.__hlsValidationVideo,
+    hlsVersion: window.Hls?.version,
+  }));
+}
+
+async function retainedPlayback(page, reference) {
+  const state = await mediaState(page);
+  assert(state.sameVideo, 'Dialog navigation replaced the video element');
+  assert.equal(state.currentSrc, reference.currentSrc, 'Dialog navigation replaced the MediaSource');
+  assert(state.paused, 'Dialog navigation resumed paused playback');
+  assert(Math.abs(state.currentTime - reference.currentTime) < 0.2, 'Dialog navigation moved playback');
+  assert(state.frames >= reference.frames, 'Dialog navigation reset decoded frame count');
+  assert.equal(state.error, null);
+  return state;
+}
+
+async function runCase(browser, assets, name, viewport) {
+  const result = { name, viewport, passed: false, phase: 'setup', sdkRequests: 0, manifestRequests: 0,
+    segments: [], backendRequests: [], athenaMethods: [], blockedExternal: [], pageErrors: [], requestErrors: [], consoleErrors: [] };
+  report.cases.push(result);
+  let context;
+  let page;
+  try {
+    context = await browser.createBrowserContext();
+    page = await context.newPage();
+    await page.setViewport(viewport);
+    await page.evaluateOnNewDocument(() => localStorage.setItem('authorization', 'synthetic-hls-validation-token'));
+    page.on('pageerror', (error) => result.pageErrors.push(String(error.stack || error)));
+    page.on('console', (message) => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
+    await page.setRequestInterception(true);
+    const data = fixtureData();
+    page.on('request', (request) => {
+      intercept(request, data, assets, result).catch(async (error) => {
+        result.requestErrors.push(String(error.stack || error));
+        if (!request.isInterceptResolutionHandled()) await request.abort('failed').catch(() => {});
+      });
+    });
+    result.phase = 'cold-link decode';
+    await page.goto(`${origin}${DRIVE_PATH}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await page.waitForFunction((selector) => {
+      const video = document.querySelector(selector);
+      return video && video.readyState >= 2 && video.videoWidth === 320 && video.currentTime >= 0.3
+        && video.currentTime < 7 && video.getVideoPlaybackQuality().totalVideoFrames >= 3;
+    }, WAIT, VIDEO);
+    await page.$eval(VIDEO, (video) => { window.__hlsValidationVideo = video; });
+    result.initial = await mediaState(page);
+    assert.equal(result.initial.hlsVersion, '1.4.8');
+    assert.equal(result.initial.height, 180);
+    assert.equal(result.initial.error, null);
+    assert(result.initial.currentSrc.startsWith('blob:'), 'HLS must attach an actual MediaSource');
+    assert(Math.abs(result.initial.duration - 8) < 0.1, 'Unexpected HLS duration');
+    result.phase = 'play';
+    await page.waitForFunction((selector, time, frames) => {
+      const video = document.querySelector(selector);
+      return video && video.currentTime > time + 0.3 && video.getVideoPlaybackQuality().totalVideoFrames > frames;
+    }, WAIT, VIDEO, result.initial.currentTime, result.initial.frames);
+    result.playing = await mediaState(page);
+    await page.click('button[aria-label="Pause"]');
+    await page.waitForFunction((selector) => document.querySelector(selector)?.paused, WAIT, VIDEO);
+    result.phase = 'timeline seek';
+    const timeline = await page.$('[role="slider"][aria-label="Drive timeline"]');
+    assert(timeline, 'Drive timeline is missing');
+    await timeline.scrollIntoView();
+    const box = await timeline.boundingBox();
+    assert(box && box.width > 0 && box.height > 0, 'Drive timeline is not visible');
+    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+    await page.waitForFunction((selector) => {
+      const video = document.querySelector(selector);
+      return video && video.paused && !video.seeking && Math.abs(video.currentTime - 4) < 0.2;
+    }, WAIT, VIDEO);
+    result.seek = await mediaState(page);
+    result.phase = 'open URL dialog';
+    const moreInfo = await page.$('::-p-text(More info)');
+    assert(moreInfo, 'Route-info trigger is missing');
+    await moreInfo.click();
+    await page.waitForFunction(() => new URLSearchParams(location.search).get('dialog') === 'route-info', WAIT);
+    await page.waitForSelector('#menu-info', { visible: true, timeout: 15000 });
+    result.dialog = await retainedPlayback(page, result.seek);
+    result.phase = 'Back';
+    await page.evaluate(() => history.back());
+    await page.waitForFunction(() => !new URLSearchParams(location.search).has('dialog'), WAIT);
+    await page.waitForSelector('#menu-info', { hidden: true, timeout: 15000 });
+    result.back = await retainedPlayback(page, result.seek);
+    result.phase = 'Forward';
+    await page.evaluate(() => history.forward());
+    await page.waitForFunction(() => new URLSearchParams(location.search).get('dialog') === 'route-info', WAIT);
+    await page.waitForSelector('#menu-info', { visible: true, timeout: 15000 });
+    result.forward = await retainedPlayback(page, result.seek);
+    result.phase = 'Close';
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !new URLSearchParams(location.search).has('dialog'), WAIT);
+    await page.waitForSelector('#menu-info', { hidden: true, timeout: 15000 });
+    result.closed = await retainedPlayback(page, result.seek);
+    assert.equal(new URL(page.url()).pathname, DRIVE_PATH);
+    assert.equal(result.sdkRequests, 1, 'Dialog changes reloaded the HLS SDK');
+    assert.equal(result.manifestRequests, 1, 'Dialog changes restarted the HLS source');
+    assert.equal(new Set(result.segments).size, 4, 'The full synthetic source was not loaded');
+    assert(!await page.evaluate(() => document.body.innerText.includes('Unable to load video')), 'The app displayed a video error');
+    assert.deepEqual(result.pageErrors, []);
+    assert.deepEqual(result.requestErrors, []);
+    result.phase = 'complete';
+    result.passed = true;
+  } catch (error) {
+    result.error = String(error.stack || error);
+    if (page) {
+      result.mediaAtFailure = await mediaState(page).catch(() => null);
+      await page.content().then((html) => writeFile(resolve(output, `${name}-failure.html`), html)).catch(() => {});
+    }
+  } finally {
+    result.url = page?.url() || null;
+    if (page) {
+      const screenshot = `${name}${result.passed ? '' : '-failure'}.png`;
+      try {
+        await page.screenshot({ path: resolve(output, screenshot), fullPage: true });
+        result.screenshot = screenshot;
+      } catch (error) {
+        result.screenshotError = String(error);
+        if (result.passed) result.phase = 'capture';
+        result.passed = false;
+      }
+    }
+    if (context) {
+      await context.close().catch((error) => {
+        result.cleanupError = String(error.stack || error);
+        result.passed = false;
+      });
+    }
+    console.log(`${result.passed ? 'PASS' : 'FAIL'} ${name}: ${result.phase}${result.error ? `\n${result.error}` : ''}`);
+  }
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+}
+
+async function writeReport() {
+  report.finishedAt = new Date().toISOString();
+  await writeFile(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
+  const images = await Promise.all(report.cases.map(async (result) => {
+    if (!result.screenshot) return '';
+    const png = await readFile(resolve(output, result.screenshot));
+    return `<section><h2>${escapeHtml(result.name)} — ${result.passed ? 'PASS' : 'FAIL'} (${escapeHtml(result.phase)})</h2><img alt="${escapeHtml(result.name)} captured app" src="data:image/png;base64,${png.toString('base64')}"></section>`;
+  }));
+  await writeFile(resolve(output, 'report.html'), `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Actual HLS drive verification</title><style>body{font:16px system-ui;background:#17222b;color:#eee;margin:24px}img{display:block;max-width:100%;height:auto;border:1px solid #58636b}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d151b;padding:16px}section{margin:24px 0}h1,h2{line-height:1.2}</style><h1>Actual HLS drive verification: ${report.passed ? 'PASS' : 'FAIL'}</h1><p>${escapeHtml(report.scope)}</p><p>Source: ${escapeHtml(report.sourceSha || 'not supplied')}</p><p>${escapeHtml(report.limitations)}</p>${images.join('')}<h2>Recorded evidence</h2><pre>${escapeHtml(JSON.stringify(report, null, 2))}</pre></html>\n`);
+}
+
+let browser;
+await mkdir(output, { recursive: true });
+try {
+  report.versions = Object.fromEntries(await Promise.all(['puppeteer', 'hls.js'].map(async (name) => {
+    const metadata = JSON.parse(await readFile(resolve('node_modules', name, 'package.json'), 'utf8'));
+    return [name, metadata.version];
+  })));
+  assert.deepEqual(report.versions, { puppeteer: '24.16.0', 'hls.js': '1.4.8' });
+  report.fixture = JSON.parse(await readFile(resolve(fixtureDirectory, 'validation.json'), 'utf8'));
+  const assets = new Map(await Promise.all(Object.entries(report.fixture.files).map(async ([name, expected]) => {
+    const bytes = await readFile(resolve(fixtureDirectory, name));
+    assert.equal(bytes.length, expected.bytes, `${name} size changed`);
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), expected.sha256, `${name} checksum changed`);
+    return [name, bytes];
+  })));
+  assets.set('sdk', await readFile(require.resolve('hls.js')));
+  report.sdkSha256 = createHash('sha256').update(assets.get('sdk')).digest('hex');
+  const puppeteer = require('puppeteer');
+  browser = await puppeteer.launch({ headless: true, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome',
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required'],
+  });
+  report.browserVersion = await browser.version();
+  await runCase(browser, assets, 'desktop', { width: 1280, height: 900, deviceScaleFactor: 1 });
+  await runCase(browser, assets, 'mobile', { width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
+  report.passed = report.cases.length === 2 && report.cases.every((result) => result.passed);
+} catch (error) {
+  report.error = String(error.stack || error);
+  console.error(report.error);
+} finally {
+  try {
+    if (browser) await browser.close();
+  } catch (error) {
+    report.cleanupError = String(error.stack || error);
+    report.passed = false;
+  } finally {
+    await writeReport();
+    if (!report.passed) process.exitCode = 1;
+  }
+}

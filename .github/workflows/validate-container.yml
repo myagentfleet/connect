@@ -115,6 +115,51 @@ jobs:
           print('PASS missing static asset: 404')
           PY
 
+      - name: Set up Bun for host browser checks
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install host validation dependencies after the image build
+        timeout-minutes: 2
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+        run: |
+          bun install --frozen-lockfile
+          bun add --no-save --trust puppeteer@24.16.0 hls.js@1.4.8
+
+      - name: Validate actual HLS drive playback in Chrome
+        timeout-minutes: 2
+        env:
+          PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+        run: |
+          node tooling/validate-drive-hls.mjs \
+            --origin http://127.0.0.1:8080 \
+            --output drive-hls-results
+
+      - name: Upload HLS screenshots and diagnostic report
+        if: always() && hashFiles('drive-hls-results/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-hls-validation-${{ github.run_id }}
+          path: drive-hls-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Prepare the directly viewable HLS report
+        if: always() && hashFiles('drive-hls-results/report.html') != ''
+        run: cp drive-hls-results/report.html "$RUNNER_TEMP/drive-hls-report-${GITHUB_RUN_ID}.html"
+
+      - name: Upload the directly viewable HLS report
+        if: always() && hashFiles('drive-hls-results/report.html') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ runner.temp }}/drive-hls-report-${{ github.run_id }}.html
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Show container logs and clean up
         if: always()
         run: |
