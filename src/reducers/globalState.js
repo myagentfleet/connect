@@ -11,10 +11,10 @@ function updateDeviceState(state, dongleId, update) {
   return { ...state, deviceCache: { ...state.deviceCache, [dongleId]: next } };
 }
 
-function updateRoute(state, fullname, fields) {
+function updateRoute(state, fullname, fields, maxqlog) {
   const previous = Object.hasOwn(state.routeCache, fullname)
     ? state.routeCache[fullname] : state.routes?.find((route) => route.fullname === fullname);
-  if (!previous) return state;
+  if (!previous || (maxqlog !== undefined && previous.maxqlog !== maxqlog)) return state;
   const updated = { ...previous, ...fields };
   const routeCache = { ...state.routeCache, [fullname]: updated };
   return {
@@ -127,7 +127,7 @@ export default function reducer(_state, action) {
       break;
     }
     case Types.ACTION_UPDATE_ROUTE:
-      state = updateRoute(state, action.fullname, action.route);
+      state = updateRoute(state, action.fullname, action.route, action.maxqlog);
       break;
     case Types.ACTION_UPDATE_ROUTE_EVENTS: {
       const firstFrame = action.events.find((event) => event.type === 'event'
@@ -135,7 +135,7 @@ export default function reducer(_state, action) {
       state = updateRoute(state, action.fullname, {
         events: action.events,
         videoStartOffset: firstFrame ? firstFrame.route_offset_millis : null,
-      });
+      }, action.maxqlog);
       break;
     }
     case Types.ACTION_UPDATE_ROUTE_LOCATION:
@@ -280,7 +280,14 @@ export default function reducer(_state, action) {
       const revision = action.revision ?? 0;
       action.routes.forEach((route) => {
         if (revision < (revisions[route.fullname] || 0)) return;
-        routeCache[route.fullname] = { ...routeCache[route.fullname], ...route };
+        const previous = routeCache[route.fullname];
+        const updated = { ...previous, ...route };
+        if (previous && previous.maxqlog !== updated.maxqlog) {
+          delete updated.events;
+          delete updated.driveCoords;
+          delete updated.videoStartOffset;
+        }
+        routeCache[route.fullname] = updated;
         revisions[route.fullname] = revision;
         delete routeLoadStatus[route.fullname];
       });

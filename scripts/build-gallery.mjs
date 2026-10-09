@@ -871,7 +871,7 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
 }
 
 async function captureRenderers(renderers, output, fixtures) {
-  await rm(output, { recursive: true, force: true });
+  // main gives each run a fresh temporary directory, including any downloaded baseline.
   await mkdir(output, { recursive: true });
   for (const renderer of renderers) {
     const server = await serveDirectory(renderer.directory);
@@ -1133,18 +1133,17 @@ async function main() {
     const currentRenderer = output;
     const baseRenderer = resolve(temporary, 'renderer-base');
     const captures = resolve(temporary, 'captures');
-    const fixtures = await fetchFixtures();
-    await buildRenderer(source, currentRenderer);
+    const [fixtures, baseSha] = await Promise.all([
+      fetchFixtures(),
+      baselineUrl ? downloadBaseline(baselineUrl, resolve(captures, 'base')) : args['base-sha'],
+      buildRenderer(source, currentRenderer),
+    ]);
     const renderers = [{ name: 'current', directory: currentRenderer }];
     if (baseSource) {
       await buildRenderer(baseSource, baseRenderer);
       renderers.unshift({ name: 'base', directory: baseRenderer });
     }
     await captureRenderers(renderers, captures, fixtures);
-    let baseSha = args['base-sha'];
-    if (baselineUrl) {
-      baseSha = await downloadBaseline(baselineUrl, resolve(captures, 'base'));
-    }
     await buildReport(
       captures,
       output,

@@ -54,6 +54,9 @@ away and back. Responses for inactive devices still populate the cache; dashboar
 membership changes only when the requested filter and limit still match, and
 older responses cannot overwrite newer route metadata. Missing or failed drives
 show a settled result with an explicit Retry action.
+Events and map coordinates are cached for the route's `maxqlog` version.
+Failed asset requests release pending work so subsequent requests can retry.
+New segments invalidate those assets; unchanged versions retain loaded data.
 A dialog-only location change keeps playback and loaded data intact. In-app zoom
 navigation stores its predecessor in browser history state; a direct selection
 link can always zoom out to the whole drive.

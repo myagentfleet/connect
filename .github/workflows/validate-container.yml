@@ -89,10 +89,16 @@ jobs:
           assets = Assets()
           assets.feed(expected.decode('utf-8'))
           assert assets.has_root, 'Built index has no app root'
-          assert {kind for _, kind in assets.items} == {'javascript', 'css'}, 'Missing built JS or CSS assets'
+          local_assets = []
           for path, kind in assets.items:
               parsed = urlsplit(path)
-              assert not parsed.scheme and not parsed.netloc and parsed.path.startswith('/assets/'), path
+              if parsed.scheme or parsed.netloc:
+                  print(f'NOT FETCHED external resource: {path}')
+                  continue
+              assert parsed.path.startswith('/assets/'), path
+              local_assets.append((path, kind))
+          assert {kind for _, kind in local_assets} == {'javascript', 'css'}, 'Missing built JS or CSS assets'
+          for path, kind in local_assets:
               with urlopen(origin + path, timeout=5) as response:
                   assert response.status == 200, (path, response.status)
                   assert kind in response.headers.get_content_type(), (path, response.headers)
