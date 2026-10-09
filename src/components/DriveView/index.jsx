@@ -9,7 +9,6 @@ import { ArrowBackBold, CloseBold } from '../../icons';
 import { filterRegularClick } from '../../utils';
 
 import Media from './Media';
-import Timeline from '../Timeline';
 
 class DriveView extends Component {
   constructor(props) {
@@ -54,7 +53,7 @@ class DriveView extends Component {
 
     return (
       <div className="DriveView">
-        <div className="flex flex-col gap-4 rounded-lg m-4 bg-[linear-gradient(to_bottom,#30373B_0%,#272D30_10%,#1D2225_100%)]">
+        <div className="flex flex-col gap-3 rounded-2xl m-4 bg-[#242B2F] border border-white/5">
           <div>
             <div className="items-center justify-between flex p-3 gap-2">
               <IconButton
@@ -83,7 +82,6 @@ class DriveView extends Component {
                 <CloseBold />
               </IconButton>
             </div>
-            <Timeline route={currentRoute} thumbnailsVisible hasRuler />
           </div>
           <div className='px-3 pb-3 md:px-8 md:pb-8'>
             {(routes && routes.length === 0)

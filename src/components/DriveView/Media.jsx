@@ -11,6 +11,7 @@ import { deviceSupportsClips } from '../../api/clips';
 import DriveMap from '../DriveMap';
 import DriveVideo from '../DriveVideo';
 import TimeDisplay from '../TimeDisplay';
+import Timeline from '../Timeline';
 import { subscribeWindowSize } from '../../hooks/window';
 import UploadQueue from '../Files/UploadQueue';
 import ClipMenu from './ClipMenu';
@@ -38,44 +39,42 @@ const styles = () => ({
     display: 'flex',
     width: 'max-content',
     alignItems: 'center',
-    border: '1px solid rgba(255,255,255,.1)',
-    borderRadius: 50,
+    border: `1px solid ${Colors.white08}`,
+    borderRadius: 12,
+    backgroundColor: Colors.grey950,
+    padding: 3,
+    gap: 2,
   },
   mediaOption: {
     alignItems: 'center',
-    borderRight: '1px solid rgba(255,255,255,.1)',
     display: 'flex',
-    flexDirection: 'column',
     justifyContent: 'center',
     cursor: 'pointer',
-    minHeight: 32,
+    minHeight: 40,
     minWidth: 44,
-    paddingLeft: 15,
-    paddingRight: 15,
+    padding: '0 10px',
+    borderRadius: 8,
+    color: Colors.lightGrey800,
+    transition: 'background-color 150ms ease, color 150ms ease, box-shadow 150ms ease',
+    '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+    '&:hover, &:focus-visible': {
+      backgroundColor: Colors.white08,
+      color: Colors.white,
+    },
+    '&:active': { backgroundColor: Colors.white12 },
+    '&[aria-pressed="true"], &[aria-expanded="true"]': {
+      backgroundColor: Colors.grey700,
+      color: Colors.white,
+      boxShadow: `inset 0 0 0 1px ${Colors.white08}`,
+    },
     '&.disabled': {
       cursor: 'default',
     },
-    '&:last-child': {
-      borderRight: 'none',
-    },
-  },
-  mediaOptionDisabled: {
-    cursor: 'auto',
-  },
-  mediaOptionIcon: {
-    backgroundColor: '#fff',
-    borderRadius: 3,
-    height: 20,
-    margin: '2px 0',
-    width: 30,
   },
   mediaOptionText: {
     fontSize: 12,
-    fontWeight: 500,
+    fontWeight: 600,
     textAlign: 'center',
-  },
-  mediaSource: {
-    width: '100%',
   },
   menuLoading: {
     position: 'absolute',
@@ -532,7 +531,7 @@ class Media extends Component {
 
   render() {
     const { inView, windowWidth, isMuted } = this.state;
-    const { hasAudio, classes } = this.props;
+    const { hasAudio, classes, currentRoute } = this.props;
 
     if (this.props.menusOnly) { // for test
       return this.renderMenus(true);
@@ -541,51 +540,48 @@ class Media extends Component {
     const showMapAlways = windowWidth >= 1536;
 
     return (
-      <div className={`${classes.playback} flex flex-col gap-4`}>
+      <section aria-label="Drive player" className={`${classes.playback} flex flex-col gap-3`}>
         {this.renderMediaOptions(showMapAlways)}
-        <div className="flex flex-row gap-5">
-          <div className={`${showMapAlways ? 'w-[60%]' : 'w-full'} min-w-0 relative`}>
-            {/* Keep video mounted so it drives playback even under the map. */}
-            <DriveVideo
+        <div className="flex items-stretch gap-4">
+          <div className={`${showMapAlways ? 'flex-[3]' : 'flex-1'} min-w-0 overflow-hidden rounded-xl border border-white/10 bg-[#111719] shadow-[0_8px_24px_#00000020]`}>
+            <div className="relative overflow-hidden">
+              {/* Keep video mounted so it drives playback even under the map. */}
+              <DriveVideo isMuted={isMuted} controlsVisible={showMapAlways || inView === MediaType.VIDEO} />
+              {!showMapAlways && (
+                <div className={`absolute inset-0 h-full z-[60] overflow-hidden ${inView === MediaType.MAP ? '' : 'invisible'}`}>
+                  <DriveMap />
+                </div>
+              )}
+            </div>
+            <Timeline route={currentRoute} thumbnailsVisible hasRuler />
+            <TimeDisplay
               isMuted={isMuted}
+              hasAudio={hasAudio}
+              onMuteToggle={this.handleMuteToggle}
             />
-            {!showMapAlways && (
-              <div className={`absolute inset-0 h-full z-[60] overflow-hidden ${inView === MediaType.MAP ? '' : 'invisible'}`}>
-                <DriveMap />
-              </div>
-            )}
           </div>
           {(inView === MediaType.VIDEO && showMapAlways) && (
-            <div className="w-[40%]">
+            <div className="flex-[2] min-w-0 overflow-hidden rounded-xl border border-white/10">
               <DriveMap />
             </div>
           )}
         </div>
-        <div className={`${showMapAlways ? 'w-[60%]' : 'w-full'} self-start flex justify-center`}>
-          <TimeDisplay
-            isThin
-            isMuted={isMuted}
-            hasAudio={hasAudio}
-            onMuteToggle={this.handleMuteToggle}
-          />
-        </div>
-      </div>
+      </section>
     );
   }
 
   renderMediaOptions(showMapAlways) {
     const { classes, device } = this.props;
-    const { inView, clipsSupported } = this.state;
+    const { inView, clipsSupported, downloadMenu, moreInfoMenu, clipMenu } = this.state;
     return (
       <>
-        <div className="flex flex-wrap">
+        <div className="flex flex-wrap items-center gap-2">
           { !showMapAlways && (
             <div className={classes.mediaOptions}>
               <button
                 type="button"
                 aria-pressed={inView === MediaType.VIDEO}
                 className={classes.mediaOption}
-                style={inView !== MediaType.VIDEO ? { opacity: 0.6 } : {}}
                 onClick={() => this.setState({ inView: MediaType.VIDEO })}
               >
                 <Typography component="span" className={classes.mediaOptionText}>Video</Typography>
@@ -594,7 +590,6 @@ class Media extends Component {
                 type="button"
                 aria-pressed={inView === MediaType.MAP}
                 className={classes.mediaOption}
-                style={inView !== MediaType.MAP ? { opacity: 0.6 } : { }}
                 onClick={() => this.setState({ inView: MediaType.MAP })}
               >
                 <Typography component="span" className={classes.mediaOptionText}>Map</Typography>
@@ -603,29 +598,38 @@ class Media extends Component {
           )}
           <div className={`${classes.mediaOptions} ml-auto`}>
             {clipsSupported && <Tooltip title={deviceIsOnline(device) ? '' : 'Device offline'} placement="top">
-              <div
+              <button
+                type="button"
                 className={classes.mediaOption}
+                aria-disabled={!deviceIsOnline(device)}
                 style={deviceIsOnline(device) ? {} : { opacity: 0.7 }}
                 aria-haspopup="true"
+                aria-expanded={Boolean(clipMenu)}
                 onClick={(ev) => deviceIsOnline(device) && this.setState({ clipMenu: ev.currentTarget })}
               >
-                <Typography className={classes.mediaOptionText}>Clip</Typography>
-              </div>
+                <Typography component="span" className={classes.mediaOptionText}>Clip</Typography>
+              </button>
             </Tooltip>}
-            <div
+            <button
+              type="button"
               className={classes.mediaOption}
               aria-haspopup="true"
-              onClick={ (ev) => this.setState({ downloadMenu: ev.target }) }
+              aria-expanded={Boolean(downloadMenu)}
+              aria-controls={downloadMenu ? 'menu-download' : undefined}
+              onClick={ (ev) => this.setState({ downloadMenu: ev.currentTarget }) }
             >
-              <Typography className={classes.mediaOptionText}>Files</Typography>
-            </div>
-            <div
+              <Typography component="span" className={classes.mediaOptionText}>Files</Typography>
+            </button>
+            <button
+              type="button"
               className={classes.mediaOption}
               aria-haspopup="true"
-              onClick={ (ev) => this.setState({ moreInfoMenu: ev.target }) }
+              aria-expanded={Boolean(moreInfoMenu)}
+              aria-controls={moreInfoMenu ? 'menu-info' : undefined}
+              onClick={ (ev) => this.setState({ moreInfoMenu: ev.currentTarget }) }
             >
-              <Typography className={classes.mediaOptionText}>More info</Typography>
-            </div>
+              <Typography component="span" className={classes.mediaOptionText}>More info</Typography>
+            </button>
           </div>
         </div>
         { this.renderMenus() }

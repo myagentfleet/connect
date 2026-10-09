@@ -117,6 +117,27 @@ test('advancing media clears stale native waiting without a matching playing eve
   expect(video.currentTime).toBe(1.25);
 });
 
+test('the focused video control survives buffering and can pause before playback is ready', () => {
+  const { video, store, getByRole } = mountVideo();
+  ready(video);
+  const control = getByRole('button', { name: 'Pause video' });
+  control.focus();
+  media(video, { readyState: 2 });
+  fireEvent.waiting(video);
+  expect(store.getState().videoStatus).toBe('loading');
+  expect(getByRole('button', { name: 'Pause video' })).toBe(control);
+  expect(control).toHaveFocus();
+  fireEvent.click(control);
+  expect(store.getState().isPlaying).toBe(false);
+  expect(video.paused).toBe(true);
+  media(video, { readyState: 4 });
+  fireEvent.canPlay(video);
+  expect(store.getState()).toMatchObject({ videoStatus: 'ready', isPlaying: false });
+  expect(getByRole('button', { name: 'Play video' })).toBe(control);
+  expect(control).toHaveFocus();
+  expect(video.paused).toBe(true);
+});
+
 test('uses the latest seek before metadata and corrects delayed first-frame metadata', () => {
   const { video, store } = mountVideo({ currentRoute: { ...route, videoStartOffset: 0 } });
   act(() => { store.dispatch(seek(9000)); store.dispatch(seek(17000)); store.dispatch(pause()); });

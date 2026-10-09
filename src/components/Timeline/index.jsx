@@ -11,11 +11,19 @@ import theme from '../../theme';
 import { pushTimelineRange } from '../../actions';
 import Colors from '../../colors';
 import { seek } from '../../timeline/playback';
-import { getSegmentNumber } from '../../utils';
+import { formatPlaybackTime } from '../../utils';
 
 const styles = () => ({
   base: {
     position: 'relative',
+    '&.hasRuler': {
+      cursor: 'crosshair',
+      touchAction: 'none',
+      '& $segments, & $segment, & $segmentColor, & $statusGradient': { height: 4 },
+      '& $thumbnails': { height: 44 },
+      '&:focus-visible': { outline: `2px solid ${Colors.lightBlue900}`, outlineOffset: -2 },
+      '&:hover $playhead, &:focus-visible $playhead': { backgroundColor: Colors.lightBlue700 },
+    },
   },
   segments: {
     position: 'relative',
@@ -75,62 +83,78 @@ const styles = () => ({
     },
   },
   ruler: {
-    backgroundColor: 'rgb(37, 51, 61)',
-    touchAction: 'none',
-    width: '100%',
-    height: 44,
-    '&:focus-visible': {
-      outline: '2px solid white',
-      outlineOffset: -2,
-    },
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    height: 28,
+    padding: '0 8px',
+    backgroundColor: '#151C20',
+    color: Colors.lightGrey800,
+    fontSize: 10,
+    fontVariantNumeric: 'tabular-nums',
+    pointerEvents: 'none',
+    '@media (max-width: 480px)': { '& .secondary': { display: 'none' } },
   },
   rulerRemaining: {
-    backgroundColor: 'rgba(29, 34, 37, 0.9)',
-    borderLeft: '1px solid #D8DDDF',
+    backgroundColor: 'rgba(0, 0, 0, 0.32)',
     position: 'absolute',
-    left: 0,
-    height: 44,
-    opacity: 0.45,
-    pointerEvents: 'none',
-    width: '100%',
-  },
-  loopStart: {
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    borderRight: '1px solid rgba(0, 0, 0, 0.8)',
-    position: 'absolute',
-    left: 0,
+    top: 4,
     height: 44,
     pointerEvents: 'none',
   },
-  loopEnd: {
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    borderLeft: '1px solid rgba(0, 0, 0, 0.8)',
+  playhead: {
     position: 'absolute',
-    right: 0,
+    top: 0,
+    bottom: 27,
+    width: 2,
+    backgroundColor: Colors.white,
+    transform: 'translateX(-1px)',
+    pointerEvents: 'none',
+    zIndex: 2,
+    '&:after': {
+      content: '""',
+      position: 'absolute',
+      bottom: -3,
+      left: -3,
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      backgroundColor: 'inherit',
+      boxShadow: '0 0 0 2px #151C20',
+    },
+  },
+  hoverLine: {
+    position: 'absolute',
+    top: 4,
     height: 44,
+    width: 1,
+    backgroundColor: Colors.white60,
     pointerEvents: 'none',
   },
   dragHighlight: {
     pointerEvents: 'none',
-    background: 'rgba(255, 255, 255, 0.1)',
-    borderLeft: '1px solid rgba(255, 255, 255, 0.3)',
-    borderRight: '1px solid rgba(255, 255, 255, 0.3)',
+    background: 'rgba(87, 169, 227, 0.25)',
+    border: `1px solid ${Colors.lightBlue900}`,
     position: 'absolute',
-    height: 44,
+    top: 0,
+    height: 48,
   },
   hoverBead: {
     zIndex: 3,
     textAlign: 'center',
-    borderRadius: 14,
-    fontSize: '0.7em',
-    padding: '3px 4px',
+    borderRadius: 7,
+    fontSize: 11,
+    fontVariantNumeric: 'tabular-nums',
+    padding: '5px 8px',
     border: `1px solid ${Colors.white10}`,
-    backgroundColor: Colors.grey800,
+    backgroundColor: Colors.grey950,
     color: Colors.white,
     position: 'absolute',
-    top: 83,
+    top: 8,
     left: 0,
-    width: 80,
+    width: 144,
+    pointerEvents: 'none',
+    boxShadow: '0 2px 8px #00000040',
   },
 });
 
@@ -142,8 +166,8 @@ const AlertStatusCodes = [
 
 function percentFromPointerEvent(ev) {
   const boundingBox = ev.currentTarget.getBoundingClientRect();
-  const x = ev.pageX - boundingBox.left;
-  return x / boundingBox.width;
+  const x = ev.clientX - boundingBox.left;
+  return Math.max(0, Math.min(1, x / boundingBox.width));
 }
 
 class Timeline extends Component {
@@ -157,7 +181,6 @@ class Timeline extends Component {
     this.handlePointerLeave = this.handlePointerLeave.bind(this);
     this.seekToOffset = this.seekToOffset.bind(this);
     this.percentToOffset = this.percentToOffset.bind(this);
-    this.segmentNum = this.segmentNum.bind(this);
     this.onRulerRef = this.onRulerRef.bind(this);
     this.renderRoute = this.renderRoute.bind(this);
 
@@ -253,7 +276,7 @@ class Timeline extends Component {
     document.addEventListener('pointerup', this.handlePointerUp);
     document.addEventListener('pointermove', this.handlePointerMove);
     document.addEventListener('pointercancel', this.handlePointerCancel);
-    this.setState({ dragging: [ev.pageX, ev.pageX] });
+    this.setState({ dragging: [ev.clientX, ev.clientX] });
   }
 
   handlePointerMove(ev) {
@@ -265,7 +288,7 @@ class Timeline extends Component {
     ev.preventDefault();
 
     const rulerBounds = this.rulerRef.current.getBoundingClientRect();
-    const endDrag = Math.max(rulerBounds.x, Math.min(rulerBounds.x + rulerBounds.width, ev.pageX));
+    const endDrag = Math.max(rulerBounds.x, Math.min(rulerBounds.x + rulerBounds.width, ev.clientX));
     if (dragging) {
       this.setState({ dragging: [dragging[0], endDrag] });
     }
@@ -326,14 +349,6 @@ class Timeline extends Component {
   offsetToPercent(offset) {
     const { zoom } = this.state;
     return (offset - zoom.start) / (zoom.end - zoom.start);
-  }
-
-  segmentNum(offset) {
-    const { route } = this.props;
-    if (route) {
-      return getSegmentNumber(route, offset);
-    }
-    return null;
   }
 
   renderRoute() {
@@ -397,15 +412,14 @@ class Timeline extends Component {
 
     let hoverString; let
       hoverStyle;
-    if (rulerBounds && hoverX) {
+    if (rulerBounds && hoverX !== null) {
       const hoverOffset = this.percentToOffset((hoverX - rulerBounds.x) / rulerBounds.width);
-      hoverStyle = { left: Math.max(-10, Math.min(rulerBounds.width - 70, hoverX - rulerBounds.x - 40)) };
+      hoverStyle = { left: Math.max(4, Math.min(rulerBounds.width - 148, hoverX - rulerBounds.x - 72)) };
       if (!Number.isNaN(hoverOffset)) {
-        hoverString = dayjs(route.start_time_utc_millis + hoverOffset).format('HH:mm:ss');
-        const segNum = this.segmentNum(hoverOffset);
-        if (segNum !== null) {
-          hoverString = `${segNum}, ${hoverString}`;
-        }
+        const selection = dragging?.map((x) => this.percentToOffset((x - rulerBounds.x) / rulerBounds.width)).sort((a, b) => a - b);
+        hoverString = dragging && Math.abs(dragging[1] - dragging[0]) > 3
+          ? `Loop ${formatPlaybackTime(selection[0])} – ${formatPlaybackTime(selection[1])}`
+          : `${formatPlaybackTime(hoverOffset)} · ${dayjs(route.start_time_utc_millis + hoverOffset).format('HH:mm:ss')}`;
       }
     }
 
@@ -422,7 +436,24 @@ class Timeline extends Component {
 
     return (
       <div className={className}>
-        <div role="presentation" className={ `${classes.base} ${hasRulerCls}` } style={ baseWidthStyle }>
+        <div
+          role={hasRuler ? 'slider' : 'presentation'}
+          aria-label={hasRuler ? 'Drive timeline' : undefined}
+          aria-valuemin={hasRuler ? zoom.start / 1000 : undefined}
+          aria-valuemax={hasRuler ? zoom.end / 1000 : undefined}
+          aria-valuenow={hasRuler ? this.props.offset / 1000 : undefined}
+          aria-valuetext={hasRuler ? `${Math.round(this.props.offset / 1000)} seconds into drive` : undefined}
+          title={hasRuler ? 'Click to seek · Drag to loop · Arrow keys skip 10 seconds' : undefined}
+          tabIndex={hasRuler ? 0 : undefined}
+          ref={hasRuler ? this.onRulerRef : undefined}
+          onPointerDown={hasRuler ? this.handlePointerDown : undefined}
+          onPointerUp={hasRuler ? this.handlePointerUp : undefined}
+          onPointerMove={hasRuler ? this.handlePointerMove : undefined}
+          onPointerLeave={hasRuler ? this.handlePointerLeave : undefined}
+          onKeyDown={hasRuler ? this.handleKeyDown : undefined}
+          className={`${classes.base} ${hasRulerCls}`}
+          style={baseWidthStyle}
+        >
           <div className={ `${classes.segments} ${hasRulerCls}` }>
             { route && this.renderRoute() }
             <div className={ `${classes.statusGradient} ${hasRulerCls}` } />
@@ -440,25 +471,17 @@ class Timeline extends Component {
           </div>
           { hasRuler && (
             <>
-              <div
-                aria-label="Drive timeline"
-                role="slider"
-                aria-valuemin={zoom.start / 1000}
-                aria-valuemax={zoom.end / 1000}
-                aria-valuenow={this.props.offset / 1000}
-                aria-valuetext={`${Math.round(this.props.offset / 1000)} seconds into drive`}
-                tabIndex={0}
-                ref={ this.onRulerRef }
-                className={classes.ruler}
-                onPointerDown={this.handlePointerDown}
-                onPointerUp={this.handlePointerUp}
-                onPointerMove={this.handlePointerMove}
-                onPointerLeave={this.handlePointerLeave}
-                onKeyDown={this.handleKeyDown}
-              >
-                <div className={classes.rulerRemaining} style={{ left: `${playedPercent}%`, width: `${100 - playedPercent}%` }} />
-                { draggerStyle && <div ref={this.dragBar} className={classes.dragHighlight} style={draggerStyle} /> }
+              <div className={classes.ruler} aria-hidden="true">
+                {[0, 0.25, 0.5, 0.75, 1].map((fraction, index) => (
+                  <span key={fraction} className={index % 2 ? 'secondary' : undefined}>
+                    {formatPlaybackTime(zoom.start + fraction * (zoom.end - zoom.start))}
+                  </span>
+                ))}
               </div>
+              <div className={classes.rulerRemaining} style={{ left: `${playedPercent}%`, width: `${100 - playedPercent}%` }} />
+              <div className={classes.playhead} style={{ left: `${playedPercent}%` }} />
+              {rulerBounds && hoverX !== null && <div className={classes.hoverLine} style={{ left: hoverX - rulerBounds.x }} />}
+              {draggerStyle && <div ref={this.dragBar} className={classes.dragHighlight} style={draggerStyle} />}
               { hoverString && (
                 <div ref={this.hoverBead} className={classes.hoverBead} style={hoverStyle}>
                   { hoverString }

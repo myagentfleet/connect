@@ -22,6 +22,12 @@ export function asyncSleep(ms) {
   });
 }
 
+export function formatPlaybackTime(milliseconds) {
+  const seconds = Number.isFinite(milliseconds) ? Math.floor(Math.max(0, milliseconds) / 1000) : 0;
+  const hours = Math.floor(seconds / 3600);
+  return `${hours ? `${hours}:` : ''}${String(Math.floor(seconds / 60) % 60).padStart(hours ? 2 : 1, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
 export function formatDriveDuration(duration) {
   const hours = Math.floor((duration / (1000 * 60 * 60))) % 24;
   const minutes = Math.floor((duration / (1000 * 60))) % 60;

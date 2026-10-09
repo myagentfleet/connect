@@ -236,7 +236,9 @@ describe('whole-app behavior', () => {
     const video = screen.getByLabelText('Drive video');
     const timeline = screen.getByRole('slider', { name: 'Drive timeline' });
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Increase play speed by 1 step' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Playback speed' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '2×' }));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
     expect(store.getState()).toMatchObject({ isPlaying: false, desiredPlaySpeed: 2 });
     fireEvent.error(video);
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();

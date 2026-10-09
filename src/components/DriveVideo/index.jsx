@@ -3,7 +3,7 @@ import { connect } from 'react-redux';
 import { Button, CircularProgress, Typography } from '@material-ui/core';
 
 import { api } from '../../api/backend';
-import { ErrorOutline } from '../../icons';
+import { ErrorOutline, Pause, PlayArrow } from '../../icons';
 import { VideoStatus, pause, play, resetPlayback, setHasAudio, setPlaybackSpeed, setVideoStatus, videoProgress } from '../../timeline/playback';
 import { openStream } from './stream';
 
@@ -272,10 +272,10 @@ class RouteVideo extends Component {
   };
 
   render() {
-    const { isMuted, videoStatus } = this.props;
+    const { isMuted, videoStatus, isPlaying, dispatch, controlsVisible = true } = this.props;
     const { error } = this.state;
     return (
-      <div className="min-h-[200px] relative w-full max-w-[964px] m-[0_auto] aspect-[1.593] bg-black">
+      <div className="min-h-[160px] relative w-full aspect-[1.593] bg-black">
         <video
           ref={this.video}
           className="block h-full w-full"
@@ -298,13 +298,27 @@ class RouteVideo extends Component {
           }}
           onError={this.onError}
         />
+        {controlsVisible && !error && (
+          <button
+            type="button"
+            aria-label={isPlaying ? 'Pause video' : 'Play video'}
+            onClick={() => dispatch(isPlaying ? pause() : play())}
+            className="group absolute inset-0 z-10 flex cursor-pointer items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-white"
+          >
+            <span aria-hidden="true" className={`flex h-16 w-16 items-center justify-center rounded-full border border-white/25 bg-black/50 text-white shadow-lg backdrop-blur-sm transition-[opacity,transform] duration-150 group-active:scale-95 motion-reduce:transition-none ${videoStatus !== VideoStatus.READY ? 'opacity-0' : isPlaying ? 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100' : ''}`}>
+              {isPlaying ? <Pause style={{ fontSize: 32 }} /> : <PlayArrow style={{ fontSize: 36 }} />}
+            </span>
+          </button>
+        )}
         {(error || videoStatus === VideoStatus.LOADING) && (
           <div className={`absolute inset-0 z-[70] pointer-events-none flex items-center justify-center bg-[#16181AAA] text-center ${error ? '' : 'animate-[drive-video-loading_150ms_ease-out_200ms_both]'}`} role="status">
-            {error ? <div className="p-4 pointer-events-auto">
-              <ErrorOutline className="mb-2" />
-              <Typography>{error}</Typography>
+            {error ? <div className="mx-3 max-w-md rounded-xl border border-white/10 bg-[#151C20]/95 p-3 sm:p-5 shadow-xl pointer-events-auto">
+              <div className="flex items-start gap-2 text-left sm:flex-col sm:items-center sm:text-center">
+                <ErrorOutline className="shrink-0" />
+                <Typography>{error}</Typography>
+              </div>
               {error === NO_VIDEO ? <Typography>Choose another range on the timeline.</Typography>
-                : <Button onClick={this.loadSource} style={{ color: 'white', marginTop: 8 }}>Retry</Button>}
+                : <Button onClick={this.loadSource} style={{ color: '#151C20', backgroundColor: 'white', borderRadius: 8, minHeight: 40, padding: '8px 24px', marginTop: 8 }}>Retry</Button>}
             </div> : <CircularProgress style={{ color: 'white' }} thickness={4} size={50} aria-label="Loading video" />}
           </div>
         )}
