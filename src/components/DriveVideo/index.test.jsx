@@ -523,6 +523,7 @@ test.each(['native', 'native fallback'])('reports a %s seek clamped outside the 
   const { video, store, getByText, getByRole } = mountVideo({ currentRoute: seekRoute });
   await finishImport();
   ready(video, 178);
+  media(video, { error: null });
   const loads = video.load.mock.calls.length;
   const plays = video.play.mock.calls.length;
   act(() => store.dispatch(seek(127000)));
