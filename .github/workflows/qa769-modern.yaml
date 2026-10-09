@@ -22,7 +22,7 @@ jobs:
             ref: ''
             capture_only: 'false'
     env:
-      FINAL_CANDIDATE_SHA: 51b322ec2b1e4319ca51955fd47c0a1bb935f7ce
+      FINAL_CANDIDATE_SHA: d70ba5c322ca4f4d1f49cf1009da2cf05cfa6b20
       QA769_CASE: controls-and-responsive
       QA769_HEADLESS: 'false'
       QA769_REVISION_LABEL: ${{ matrix.revision }}
