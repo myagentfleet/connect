@@ -106,7 +106,10 @@ async function mockFetch(input, init = {}) {
   if (url.pathname.endsWith('/events.json') || url.pathname.endsWith('/coords.json')) return json([]);
   if (url.pathname.endsWith('/files')) return json(options.files ?? {});
   if (url.pathname.endsWith('/preserved') || url.pathname.endsWith('/athena_offline_queue')) return json([]);
-  if (url.hostname === 'athena.comma.ai') return json({ jsonrpc: '2.0', id: 0, result: {} });
+  if (url.hostname === 'athena.comma.ai') {
+    const { method, id } = JSON.parse(init.body);
+    return json({ jsonrpc: '2.0', id, result: method === 'listUploadQueue' ? [] : {} });
+  }
   throw new Error(`Unhandled request: ${init.method || 'GET'} ${url.href}`);
 }
 
@@ -274,6 +277,27 @@ describe('whole-app behavior', () => {
     expect(document.getElementById(menuId)).toContainElement(document.activeElement);
     fireEvent.keyDown(document.activeElement, { key: 'Escape', keyCode: 27 });
     await waitFor(() => expect(document.getElementById(menuId)).toBeNull());
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveFocus();
+  });
+
+  test('Files keyboard navigation reaches loaded actions and Tab restores trigger focus', async () => {
+    const url = `https://routes.example.com/${FIRST}/${LOG}/0/fcamera.hevc?sig=original`;
+    await renderApp(`/${FIRST}/${LOG}`, { files: { cameras: [url] } });
+    const trigger = screen.getByRole('button', { name: 'Files', exact: true });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const download = await screen.findByRole('button', { name: 'download', exact: true });
+    const menu = screen.getByRole('menu');
+    expect(menu).toHaveFocus();
+    fireEvent.keyDown(menu, { key: 'ArrowDown', keyCode: 40 });
+    expect(download).toHaveFocus();
+    fireEvent.keyDown(download, { key: 'ArrowDown', keyCode: 40 });
+    expect(within(screen.getByRole('menuitem', { name: /^Wide road/ })).getByRole('button')).toHaveFocus();
+    fireEvent.keyDown(document.activeElement, { key: 'ArrowUp', keyCode: 38 });
+    expect(download).toHaveFocus();
+    fireEvent.keyDown(download, { key: 'Tab', keyCode: 9 });
+    await waitFor(() => expect(document.getElementById('menu-download')).toBeNull());
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(trigger).toHaveFocus();
   });

@@ -245,6 +245,21 @@ class Media extends Component {
     this.setState(prevState => ({ isMuted: !prevState.isMuted }));
   }
 
+  handleFilesMenuKeyDown = (event) => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const items = Array.from(event.currentTarget.querySelectorAll(
+      'button:not(:disabled):not([aria-disabled="true"]), [role="menuitem"][data-file-action="true"]',
+    ));
+    if (!items.length) return;
+    const current = items.findIndex((item) => item.contains(event.target));
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+      : event.key === 'ArrowDown' ? (current + 1) % items.length
+        : current <= 0 ? items.length - 1 : current - 1;
+    items[next].focus();
+  };
+
   componentDidMount() {
     this.mounted = true;
     this.unsubscribeWindowSize = subscribeWindowSize(({ width }) => {
@@ -689,6 +704,9 @@ class Media extends Component {
           id="menu-download"
           open={ Boolean(alwaysOpen || downloadMenu) }
           anchorEl={ downloadMenu }
+          disableAutoFocusItem
+          MenuListProps={{ tabIndex: -1, onKeyDownCapture: this.handleFilesMenuKeyDown }}
+          onEnter={(paper) => paper.querySelector('[role="menu"]')?.focus()}
           onClose={ () => this.setState({ downloadMenu: null }) }
           onExited={() => { if (!this.state.uploadModal) this.downloadButton.current?.focus(); }}
           anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
@@ -756,6 +774,7 @@ class Media extends Component {
           { deviceIsOnline(device) || !files ? (
             <MenuItem
               onClick={ files ? () => this.setState({ uploadModal: true, downloadMenu: null }) : null }
+              data-file-action={Boolean(files)}
               style={ files ? { pointerEvents: 'auto' } : { color: Colors.white60 } }
               className={ classes.filesItem }
               disabled={ !files }
