@@ -1,5 +1,5 @@
 # Exact-source application checks. Native screenshots require a separate visual review.
-name: qa769-native-seek-recovery
+name: qa769-native-control-contrast
 
 on:
   push:
@@ -15,14 +15,14 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 15
     env:
-      QA_CANDIDATE_SHA: 0996a76f1a3d963cde7f0d10b211c5cd02fb0c0e
+      QA_CANDIDATE_SHA: fd173c1c153e1f893494963675472ad4e448a7ce
       QA769_OUTPUT: ${{ github.workspace }}/results/native-seek
       QA769_ENGINE: webkit
       QA769_NATIVE_PROFILE: 'true'
       QA769_FRAME_OBSERVER: 'false'
       QA769_TRACE_COMMANDS: 'false'
       QA769_DIAGNOSTIC_ONLY: 'true'
-      QA769_CASE: native-ui-pixels-healthy-75,native-ui-pixels-healthy-125,native-ui-pixels-repaired-middle-75,native-manifest-error-and-repaired-retry,native-first-available-startup,native-missed-seek-retry,native-missed-seek-seek
+      QA769_CASE: native-missed-seek-retry,native-missed-seek-seek
       VITE_POSTHOG_KEY: ''
       VITE_POSTHOG_HOST: ''
       E2E: 'true'
@@ -63,7 +63,7 @@ jobs:
           npx --no-install playwright install --with-deps webkit 2>&1 | tee "$QA769_OUTPUT/browser-install.log"
       - name: Check native playback and explicit error recovery without RVFC
         run: node scripts/qa769-platforms.mjs 2>&1 | tee "$QA769_OUTPUT/native-seek.log"
-      - name: Require all native measurements and recovery checks
+      - name: Require both recovery paths and visible touch controls
         run: |
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
@@ -90,8 +90,13 @@ jobs:
             assert.equal(entry.errorSamples.length, 6);
             assert.equal(entry.recoveredSamples.length, 6);
             assert.equal(entry.resumed.passed, true);
+            for (const phase of ['beforeScreenshot', 'afterScreenshot']) {
+              assert.equal(entry.primaryAfterPause[phase].background, 'rgb(255, 255, 255)');
+              assert.equal(entry.primaryAfterPause[phase].hoverNone, true);
+              assert.equal(entry.primaryAfterPause[phase].hovered, true);
+            }
           }
-          console.log('All seven exact-source native scenarios satisfied their checks. Presented frames and layouts still require visual review.');
+          console.log('Both selected exact-source native scenarios satisfied their checks. Presented frames and layouts still require visual review.');
           JS
       - name: Upload all outcomes
         if: always()

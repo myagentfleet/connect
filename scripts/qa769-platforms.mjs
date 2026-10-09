@@ -797,7 +797,27 @@ async function main() {
           result.resumed = await nativePixelStartup(page);
           await pause(page);
           result.resumedMedia = await nativePixelSample(page);
+          const primaryStyle = async () => button(page, 'Play').evaluate((element) => {
+            const style = getComputedStyle(element);
+            return { hoverNone: matchMedia('(hover: none)').matches, hovered: element.matches(':hover'),
+              active: element.matches(':active'), background: style.backgroundColor, color: style.color,
+              opacity: style.opacity, rect: element.getBoundingClientRect().toJSON() };
+          });
+          result.primaryAfterPause = { beforeWait: await primaryStyle() };
+          await page.waitForFunction(() => {
+            const element = document.querySelector('[aria-label="Playback controls"] button[aria-label="Play"]');
+            return element?.matches(':hover') && matchMedia('(hover: none)').matches && !element.matches(':active')
+              && getComputedStyle(element).backgroundColor === 'rgb(255, 255, 255)';
+          }, null, { timeout: 5000 });
+          result.primaryAfterPause.beforeScreenshot = await primaryStyle();
           await capture(page, `native-missed-seek-${recovery}-resumed`);
+          result.primaryAfterPause.afterScreenshot = await primaryStyle();
+          for (const phase of ['beforeScreenshot', 'afterScreenshot']) {
+            const style = result.primaryAfterPause[phase];
+            assert.ok(style.hoverNone && style.hovered && !style.active, 'Touch-layout hover remains real through the screenshot');
+            assert.equal(style.background, 'rgb(255, 255, 255)', 'The primary control keeps its white circle after a touch-layout interaction');
+            assert.equal(style.opacity, '1', 'The primary control is fully visible');
+          }
           assert.equal(await page.evaluate(() => globalThis.qaFrameMetadata.length), 0, 'No RVFC measurements enter the error/recovery check');
         }, { deferFailureScreenshot: true });
       }
