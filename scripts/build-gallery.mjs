@@ -686,12 +686,14 @@ async function captureOne(browser, origin, outputPath, state, viewport, fixtures
     ]);
     await page.evaluateOnNewDocument((timestamp, authenticated) => {
       const NativeDate = Date;
-      class FrozenDate extends NativeDate {
-        constructor(...args) { super(...(args.length === 0 ? [timestamp] : args)); }
-        static now() { return timestamp; }
+      const clockStartedAt = performance.now();
+      // Keep the calendar reproducible while letting debounce timers measure elapsed time.
+      class GalleryDate extends NativeDate {
+        constructor(...args) { super(...(args.length === 0 ? [GalleryDate.now()] : args)); }
+        static now() { return timestamp + Math.floor(performance.now() - clockStartedAt); }
       }
-      Object.setPrototypeOf(FrozenDate, NativeDate);
-      globalThis.Date = FrozenDate;
+      Object.setPrototypeOf(GalleryDate, NativeDate);
+      globalThis.Date = GalleryDate;
       if (authenticated) localStorage.setItem('authorization', 'gallery-token');
       else localStorage.removeItem('authorization');
       localStorage.removeItem('selectedDongleId');

@@ -5,6 +5,7 @@ import { createMemoryHistory } from 'history';
 import App from './App';
 import { createInitialState } from './initialState';
 import { createAppStore } from './store';
+import * as clipApi from './api/clips';
 
 const mocks = vi.hoisted(() => ({ authenticated: true, options: {}, requests: [], unexpectedRequests: [], hardNavigate: vi.fn() }));
 
@@ -620,6 +621,27 @@ describe('whole-app behavior', () => {
       expect(measure.mock.contexts).toContain(trigger);
       expect(history.location.search).toBe(`?dialog=${dialog}`);
     } finally {
+      measure.mockRestore();
+    }
+  });
+
+  test.each(['dashboard', 'drive'])('a cold %s clips panel follows its trigger when support resolves', async (page) => {
+    let resolveSupport;
+    const support = vi.spyOn(clipApi, 'deviceSupportsClips').mockReturnValue(new Promise((resolve) => { resolveSupport = resolve; }));
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect');
+    try {
+      const pathname = page === 'drive' ? `/${FIRST}/${LOG}` : `/${FIRST}`;
+      await renderApp(`${pathname}?dialog=clips`);
+      expect(await screen.findByRole('dialog')).toBeVisible();
+      expect(screen.queryByLabelText('Clips')).not.toBeInTheDocument();
+      expect(screen.queryByText('Clip')).not.toBeInTheDocument();
+
+      measure.mockClear();
+      await act(async () => resolveSupport(true));
+      const trigger = page === 'drive' ? screen.getByText('Clip').parentElement : screen.getByLabelText('Clips');
+      await waitFor(() => expect(measure.mock.contexts).toContain(trigger));
+    } finally {
+      support.mockRestore();
       measure.mockRestore();
     }
   });
