@@ -185,15 +185,11 @@ class Timeline extends Component {
     this.renderRoute = this.renderRoute.bind(this);
 
     this.rulerRef = React.createRef();
-    this.dragBar = React.createRef();
-    this.hoverBead = React.createRef();
     this.thumbnailsRef = React.createRef();
 
-    const { zoomOverride, zoom } = this.props;
     this.state = {
       dragging: null,
       hoverX: null,
-      zoom: zoomOverride || zoom,
       thumbnail: {
         height: 0,
         width: 0,
@@ -201,9 +197,11 @@ class Timeline extends Component {
     };
   }
 
-  componentDidMount() {
-    this.componentDidUpdate({});
+  get zoom() {
+    return this.props.zoomOverride || this.props.zoom;
+  }
 
+  componentDidMount() {
     if (typeof ResizeObserver !== 'undefined' && this.thumbnailsRef.current) {
       this.resizeObserver = new ResizeObserver((entries) => {
         const entry = entries[0];
@@ -214,13 +212,6 @@ class Timeline extends Component {
         this.setState({ thumbnail: { width, height } });
       });
       this.resizeObserver.observe(this.thumbnailsRef.current);
-    }
-  }
-
-  componentDidUpdate(prevProps) {
-    const { zoomOverride, zoom } = this.props;
-    if (prevProps.zoomOverride !== zoomOverride || prevProps.zoom !== zoom) {
-      this.setState({ zoom: zoomOverride || zoom });
     }
   }
 
@@ -238,7 +229,7 @@ class Timeline extends Component {
 
   handleKeyDown = (ev) => {
     const { offset } = this.props;
-    const { zoom } = this.state;
+    const { zoom } = this;
     const target = { ArrowLeft: offset - 10000, ArrowDown: offset - 10000,
       ArrowRight: offset + 10000, ArrowUp: offset + 10000, Home: zoom.start, End: zoom.end }[ev.key];
     if (target === undefined) return;
@@ -285,8 +276,6 @@ class Timeline extends Component {
     if (!this.rulerRef.current) {
       return;
     }
-    ev.preventDefault();
-
     const rulerBounds = this.rulerRef.current.getBoundingClientRect();
     const endDrag = Math.max(rulerBounds.x, Math.min(rulerBounds.x + rulerBounds.width, ev.clientX));
     if (dragging) {
@@ -342,18 +331,18 @@ class Timeline extends Component {
   }
 
   percentToOffset(perc) {
-    const { zoom } = this.state;
+    const { zoom } = this;
     return perc * (zoom.end - zoom.start) + zoom.start;
   }
 
   offsetToPercent(offset) {
-    const { zoom } = this.state;
+    const { zoom } = this;
     return (offset - zoom.start) / (zoom.end - zoom.start);
   }
 
   renderRoute() {
     const { classes, route } = this.props;
-    const { zoom } = this.state;
+    const { zoom } = this;
 
     if (!route.events) {
       return null;
@@ -401,7 +390,8 @@ class Timeline extends Component {
 
   render() {
     const { classes, hasRuler, className, route, thumbnailsVisible } = this.props;
-    const { thumbnail, hoverX, dragging, zoom } = this.state;
+    const { thumbnail, hoverX, dragging } = this.state;
+    const { zoom } = this;
 
     const hasRulerCls = hasRuler ? 'hasRuler' : '';
 
@@ -481,9 +471,9 @@ class Timeline extends Component {
               <div className={classes.rulerRemaining} style={{ left: `${playedPercent}%`, width: `${100 - playedPercent}%` }} />
               <div className={classes.playhead} style={{ left: `${playedPercent}%` }} />
               {rulerBounds && hoverX !== null && <div className={classes.hoverLine} style={{ left: hoverX - rulerBounds.x }} />}
-              {draggerStyle && <div ref={this.dragBar} className={classes.dragHighlight} style={draggerStyle} />}
+              {draggerStyle && <div className={classes.dragHighlight} style={draggerStyle} />}
               { hoverString && (
-                <div ref={this.hoverBead} className={classes.hoverBead} style={hoverStyle}>
+                <div className={classes.hoverBead} style={hoverStyle}>
                   { hoverString }
                 </div>
               ) }

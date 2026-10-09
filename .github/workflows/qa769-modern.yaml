@@ -25,10 +25,10 @@ jobs:
             ref: 109edb39ffa7a4ad3c38788ca2f39a286538ff07
             capture_only: 'true'
           - revision: previous
-            ref: c0772ff6641ce93bc16a6fc884a0959da4a9c17b
+            ref: d70ba5c322ca4f4d1f49cf1009da2cf05cfa6b20
             capture_only: 'true'
     env:
-      FINAL_CANDIDATE_SHA: d70ba5c322ca4f4d1f49cf1009da2cf05cfa6b20
+      FINAL_CANDIDATE_SHA: 8eaa650615151569cb00eba21c79e167e969d9e6
       QA769_HEADLESS: 'false'
       QA769_REVISION_LABEL: ${{ matrix.revision }}
       QA769_CAPTURE_ONLY: ${{ matrix.capture_only }}
